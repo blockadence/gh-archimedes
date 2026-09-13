@@ -90,9 +90,10 @@ func runPrune(out io.Writer, root, slugFilter string, force bool, ghState prune.
 			// see which entry it is about, rather than being carried to
 			// the bottom of the run and run together with the others. A
 			// step in from the line that introduces it, so a reason
-			// running to several lines still reads as one entry's.
+			// running to several lines still reads as one entry's — which
+			// is the nesting indentUnder holds.
 			failed = append(failed, stackref.Ref{Repo: it.Repo, Slug: it.Slug}.String())
-			fmt.Fprintf(out, "  not removed:\n%s\n", indent(indent(err.Error())))
+			fmt.Fprintf(out, "  not removed:\n%s\n", indentUnder(err.Error()))
 			continue
 		}
 		fmt.Fprintln(out, "  removed.")

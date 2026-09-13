@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -146,15 +145,3 @@ then make the commit yourself:
   cd %s && git add -A && git commit -m "%s"
 
 `
-
-// indent puts git's own words where a notice quotes them: two spaces in, on
-// however many lines git wrote them.
-func indent(text string) string {
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		if line != "" {
-			lines[i] = "  " + line
-		}
-	}
-	return strings.Join(lines, "\n")
-}
