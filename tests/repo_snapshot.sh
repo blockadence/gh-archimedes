@@ -531,7 +531,14 @@ mkdir -p "$REPO12"
 git init -q "$REPO12"
 echo "started, not committed" > "$REPO12/scratch-note.md"
 
-if ( set -euo pipefail; snapshot_repo_state "$REPO12" > "$WORK/snapshot12" ); then
+# A statement of its own with the status read afterwards, rather than asked
+# for in an `if`: bash ignores errexit inside a subshell that is a condition,
+# so the `if` spelling of this runs under options no driver has and passes
+# against a function that walked straight past a failure. Every check in this
+# file that says "under a driver's shell options" is spelled this way.
+( set -euo pipefail; snapshot_repo_state "$REPO12" > "$WORK/snapshot12" )
+snap12=$?
+if [ "$snap12" -eq 0 ]; then
   pass "snapshotting a repo with no commits yet succeeds under the shell options every driver sets"
 else
   fail "snapshotting a repo with no commits yet succeeds under the shell options every driver sets"
@@ -667,7 +674,9 @@ assert_eq "$out" "" "and says nothing while it fails, so nothing reads as a repo
 # fingerprinting in snapshot_repo_state is the last pipeline of the function,
 # so pipefail carries its status out and a driver's `set -e` ends the run
 # before a session ever starts.
-if ( set -euo pipefail; snapshot_repo_state "$REPO17" > "$WORK/snapshot17-failed" ); then
+( set -euo pipefail; snapshot_repo_state "$REPO17" > "$WORK/snapshot17-failed" )
+snap17=$?
+if [ "$snap17" -eq 0 ]; then
   fail "snapshotting fails under a driver's shell options when the fingerprinting cannot run"
 else
   pass "snapshotting fails under a driver's shell options when the fingerprinting cannot run"
@@ -693,5 +702,156 @@ assert_eq "$(printf 'scratch-note.md\0' | fingerprint_paths "$REPO17" | tr '\0' 
   "$(printf '%s\t%s' "$(git -C "$REPO17" hash-object --no-filters -- scratch-note.md)" scratch-note.md)" \
   "the fingerprinting itself needs no temp file, so it has nothing left to fail at on a machine that has run out of them"
 unset -f mktemp
+
+echo ""
+echo "repo snapshot, a read of the repo that could not be made:"
+
+# The other three producers read the same way the fingerprinting was, and with
+# the same consequence: `git ls-files --others`, `git diff --name-only` and the
+# directory walk each hand back nothing when they fall over, and nothing is
+# byte-for-byte what a repo the run did not touch looks like. The worst of them
+# is the tracked-file read, because the C records are how a clobbered tracked
+# file gets checked back out of HEAD -- so a rollback that loses them puts
+# nothing back and then says the repo is back as it was found.
+#
+# A stand-in git that fails for one flag and delegates the rest, so each read is
+# broken on its own while everything around it -- the HEAD check, the checkout,
+# the unstaging -- still works. Provoking these for real would need a repo git
+# itself could not read, which is not a state a test can leave lying around.
+GIT_STAND_IN_FLAG=""
+git() { # <arg>...
+  local a
+  for a in "$@"; do
+    if [ "$a" = "$GIT_STAND_IN_FLAG" ]; then return 1; fi
+  done
+  command git "$@"
+}
+
+REPO19="$WORK/repo19"
+mkdir -p "$REPO19/src"
+echo "# readme" > "$REPO19/README.md"
+echo "console.log('hi')" > "$REPO19/src/index.js"
+make_repo_at "$REPO19"
+echo "notes to self" > "$REPO19/scratch-note.md"
+SNAP19="$WORK/snapshot19"
+snapshot_repo_state "$REPO19" > "$SNAP19"
+
+# The run: a file of its own, a tracked file clobbered, the operator's note
+# written over, and a directory left behind. One of each thing a rollback has
+# to undo or report.
+echo "an ADR nobody asked for" > "$REPO19/ADR.md"
+echo "clobbered by the run" > "$REPO19/src/index.js"
+echo "helpfully rewritten" > "$REPO19/scratch-note.md"
+mkdir -p "$REPO19/.specify/memory"
+
+GIT_STAND_IN_FLAG="--others"
+if changed_since_snapshot "$REPO19" "$SNAP19" >/dev/null 2>&1; then
+  fail "reading what the run did fails when the untracked listing cannot be made, rather than reading as a run that added nothing"
+else
+  pass "reading what the run did fails when the untracked listing cannot be made, rather than reading as a run that added nothing"
+fi
+
+if out="$(paths_changed_since_snapshot "$REPO19" "$SNAP19" 2>&1)"; then
+  fail "naming what the run changed carries that failure out rather than coming back empty"
+else
+  pass "naming what the run changed carries that failure out rather than coming back empty"
+fi
+assert_eq "$out" "" "and names nothing while it fails"
+
+# The rollback reads the same answer, so it refuses too rather than deleting
+# what it could still see and calling the repo restored.
+if out="$(restore_repo_state "$REPO19" "$SNAP19" 2>&1)"; then
+  fail "restore refuses when the untracked listing cannot be made, rather than reporting a repo put back"
+else
+  pass "restore refuses when the untracked listing cannot be made, rather than reporting a repo put back"
+fi
+assert_file_exists "$REPO19/ADR.md" \
+  "and it really did leave the repo alone -- a rollback that could not work out what to undo has undone nothing"
+
+GIT_STAND_IN_FLAG="--name-only"
+if changed_since_snapshot "$REPO19" "$SNAP19" >/dev/null 2>&1; then
+  fail "reading what the run did fails when the tracked-file read cannot be made, rather than reading as a run that changed nothing tracked"
+else
+  pass "reading what the run did fails when the tracked-file read cannot be made, rather than reading as a run that changed nothing tracked"
+fi
+
+if out="$(paths_changed_since_snapshot "$REPO19" "$SNAP19" 2>&1)"; then
+  fail "and naming what the run changed carries that one out too"
+else
+  pass "and naming what the run changed carries that one out too"
+fi
+assert_eq "$out" "" "and names nothing while it fails"
+
+# The one this issue is named for. No C records means nothing is checked out of
+# HEAD, and no C records is indistinguishable from a run that touched no
+# tracked file -- so read that way the rollback puts the clobbered file back
+# nowhere and announces a repo it has not touched.
+if out="$(restore_repo_state "$REPO19" "$SNAP19" 2>&1)"; then
+  fail "restore refuses when the tracked-file read cannot be made, rather than reporting a repo put back"
+else
+  pass "restore refuses when the tracked-file read cannot be made, rather than reporting a repo put back"
+fi
+assert_not_contains "$out" "back as it was found" \
+  "and does not say the repo is back as it was found"
+assert_eq "$(cat "$REPO19/src/index.js")" "clobbered by the run" \
+  "and the tracked file the run wrote over is still as the run left it, which is what the refusal is about"
+
+unset -f git
+GIT_STAND_IN_FLAG=""
+
+echo ""
+echo "repo snapshot, a directory walk that could not be made:"
+
+# The odd one of the four, and answered differently on purpose. The walk feeds
+# the snapshot's D records and the prune at the end of a rollback, and its
+# failure leaves a directory behind rather than misreporting one -- so the
+# snapshot half refuses outright, while the rollback, which by then has already
+# undone everything else, says what it could not do and lets the run stand.
+find() { return 1; }
+
+if list_repo_dirs "$REPO19" >/dev/null 2>&1; then
+  fail "listing a repo's directories fails when the walk cannot be made, rather than reading as a repo with no directories"
+else
+  pass "listing a repo's directories fails when the walk cannot be made, rather than reading as a repo with no directories"
+fi
+
+# A snapshot with no D records is not a harmless one: every directory in the
+# repo then reads as one the run created, and the rollback prunes the empty
+# ones the operator had.
+#
+# The walk is not the last pipeline of the function -- the fingerprinting is
+# -- so it is errexit rather than pipefail alone that has to end the run here,
+# which is why the spelling above matters more for this one than for any other
+# check in this file.
+( set -euo pipefail; snapshot_repo_state "$REPO19" > "$WORK/snapshot19-failed" )
+snap19=$?
+if [ "$snap19" -eq 0 ]; then
+  fail "snapshotting fails under a driver's shell options when the directory walk cannot be made"
+else
+  pass "snapshotting fails under a driver's shell options when the directory walk cannot be made"
+fi
+
+# Under `set -euo pipefail`, the options both drivers set, and as a statement
+# of its own so that errexit is really on inside it -- the two halves of
+# calling this the way a driver's success path does, where the call is
+# unguarded. Neither half is optional: a bare call from a test shell with no
+# errexit passes against a rollback that would end the driver at the first
+# pipeline whose producer failed, having said none of what it says below.
+out="$( set -euo pipefail; restore_repo_state "$REPO19" "$SNAP19" 2>&1 )"
+ok19=$?
+assert_eq "$ok19" "0" \
+  "a rollback whose directory walk failed still stands: everything it undoes had already been undone by then, and an empty directory left behind is a trace rather than a repo reported back as it was not"
+assert_contains "$out" "could not list" \
+  "and says so, rather than being silent about the one thing it did not do"
+assert_file_missing "$REPO19/ADR.md" \
+  "and everything the walk is not needed for is still undone"
+assert_eq "$(cat "$REPO19/src/index.js")" "console.log('hi')" \
+  "including the tracked file the run clobbered, checked back out of HEAD"
+assert_dir_exists "$REPO19/.specify/memory" \
+  "the directory the run left behind is what is still there, which is what the line on stderr is for"
+assert_contains "$out" "scratch-note.md" \
+  "and the work the run wrote over is still named, which is the report nothing else will make"
+
+unset -f find
 
 report

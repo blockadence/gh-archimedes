@@ -366,17 +366,19 @@ fingerprint_paths() { # <repo-path>
 # leaves the file byte-for-byte as it was, which is not a loss to report.
 #
 # Returns non-zero, printing why, if HEAD has moved since the snapshot --
-# see snapshot_head_unmoved. Returns non-zero, too, if the fingerprinting
-# behind the O records could not be done at all -- the other way this could be
-# wrong in the reassuring direction, since an empty answer from here reads as
-# "the run touched nothing of yours" and so has to mean that and only that.
+# see snapshot_head_unmoved. Returns non-zero, too, if any of the four reads
+# behind the records could not be made: the untracked listing behind the A
+# records, the tracked-file read behind the C and S ones, or the
+# fingerprinting behind the O ones. That is the way this could be wrong in the
+# reassuring direction, since an empty answer from here reads as "the run
+# touched nothing of yours" and so has to mean that and only that.
 #
 # Unlike the two helpers below, it does not promise to have printed nothing
-# when it fails that way: the A, C and S records are already out by the time
-# the O records are asked for. Both callers spool this whole answer into a
-# file and throw the file away on a non-zero status, so a half-written list is
-# never acted on -- which is the other half of why they spool it, and why a
-# third caller has to do the same.
+# when it fails that way: the A records are out before the C and S ones are
+# asked for, and both are out before the O ones. Both callers spool this whole
+# answer into a file and throw the file away on a non-zero status, so a
+# half-written list is never acted on -- which is the other half of why they
+# spool it, and why a third caller has to do the same.
 changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
   local repo="$1" snapshot="$2"; shift 2
 
@@ -409,18 +411,31 @@ changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
   done < "$snapshot"
   for value in "$@"; do keep["$value"]=1; done
 
-  while IFS= read -r -d '' value; do
+  # Piped into the loop rather than read through `< <(...)`, which is this
+  # file's one rule about reading a producer. A git that falls over inside a
+  # process substitution hands back no paths and no status, and no paths is
+  # byte-for-byte "the run added nothing" -- the answer a driver acts on by
+  # harvesting and standing down. Neither errexit nor pipefail can see in
+  # there to say otherwise.
+  #
+  # This way git's status is PIPESTATUS[0], which needs no shell option of the
+  # caller's to be there, and needs no temp file either: the loop only reads
+  # the two sets above and prints, so it can run in a subshell of its own. The
+  # check has to be the very next command, since the next pipeline overwrites
+  # it.
+  git -C "$repo" ls-files --others -z | while IFS= read -r -d '' value; do
     [ -n "${before["U:$value"]:-}" ] && continue
     [ -n "${keep["$value"]:-}" ] && continue
     printf 'A\t%s\0' "$value"
-  done < <(git -C "$repo" ls-files --others -z)
+  done
+  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
 
   # Only against a commit: a repo with no commits yet has nothing tracked to
   # have gone dirty. The guard above has already established HEAD is where
   # the snapshot left it, so this asks git rather than re-reading the H
   # record it just compared.
   if git -C "$repo" rev-parse --verify -q HEAD >/dev/null; then
-    while IFS= read -r -d '' value; do
+    git -C "$repo" diff --name-only -z HEAD | while IFS= read -r -d '' value; do
       [ -n "${before["M:$value"]:-}" ] && continue
       [ -n "${keep["$value"]:-}" ] && continue
       # git now calls this a change to a tracked file; before the run it was
@@ -435,7 +450,12 @@ changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
         continue
       fi
       printf 'C\t%s\0' "$value"
-    done < <(git -C "$repo" diff --name-only -z HEAD)
+    done
+    # The same check as above, and the one it matters most for. The C records
+    # are how a tracked file the run clobbered gets checked back out of HEAD,
+    # so losing them is not a thinner report -- it is a rollback that puts
+    # nothing back and then says the repo is back as it was found.
+    [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
   fi
 
   # And the one reading nothing above can reach: the paths recorded by
@@ -669,6 +689,11 @@ paths_changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> .
 # Both drivers answer that with "could not roll <repo> back to how it was
 # found -- it needs looking at by hand", which is the honest thing to say: a
 # rollback that could not find out what to undo has undone nothing.
+#
+# The one failure that does not come back as a status is the directory walk
+# the prune at the end runs on, which by then has nothing left to decide: it
+# is reported on stderr and the rollback stands. The body says why, where it
+# happens.
 restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
   local repo="$1" snapshot="$2"
 
@@ -733,10 +758,43 @@ restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
     kind="${record%%$'\t'*}"; value="${record#*$'\t'}"
     [ "$kind" = "D" ] && dirs_before["$value"]=1
   done < "$snapshot"
-  while IFS= read -r -d '' value; do
-    [ -n "${dirs_before["$value"]:-}" ] && continue
-    rmdir "$repo/$value" 2>/dev/null || true
-  done < <(list_repo_dirs "$repo")
+  #
+  # The one read here whose failure is not carried out in the return status,
+  # and the difference is what it would cost to say it that way. A walk that
+  # cannot be made prunes none of the directories it did not get to, which
+  # leaves a trace of the run behind -- it does not misreport one, the way
+  # losing the C records above would. By here everything else has already been
+  # undone, and this function's non-zero status means the opposite: "could not
+  # work out what to undo, so nothing was", which both drivers answer with "it
+  # needs looking at by hand". Worse, on the success path spec-kit and pocock
+  # run this unguarded under `set -e`, so returning non-zero would discard a
+  # run that succeeded and everything it produced, over an empty directory. So
+  # it is said out loud instead and the run stands -- the same answer
+  # report_kept_paths_replaced got, reached the same way. What is not on offer
+  # is the third option: pruning nothing and saying nothing, which is this
+  # file's silence-is-a-bug rule broken where the bug reads as good news.
+  #
+  # Which is why the pipeline is inside an `if` rather than standing on its
+  # own. Under the `set -euo pipefail` both drivers run, a bare pipeline whose
+  # first stage failed ends the shell *at* the pipeline -- so the check below
+  # it would never run, the line on stderr would never be printed, and the
+  # unguarded success-path call would take the whole run down: every one of
+  # the three things this paragraph argues for, lost to the spelling. A
+  # condition suspends errexit for the list, and the status is still read out
+  # of PIPESTATUS rather than out of the pipeline, so it does not need a
+  # pipefail of the caller's either.
+  #
+  # Said at the end rather than here, so that nothing printed after it can
+  # read as a correction of it.
+  local dirs_unlisted=0
+  if list_repo_dirs "$repo" | while IFS= read -r -d '' value; do
+       [ -n "${dirs_before["$value"]:-}" ] && continue
+       rmdir "$repo/$value" 2>/dev/null || true
+     done
+     [ "${PIPESTATUS[0]}" -ne 0 ]
+  then
+    dirs_unlisted=1
+  fi
 
   # Silent when there is nothing to say, or it would be noise on every run
   # against every repo anybody is working in.
@@ -747,6 +805,10 @@ restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
       echo "those paths are as the run left them. What they said before was never committed, so it cannot be put back from here."
       echo "this list covers the paths git was not already ignoring. A run that wrote over an ignored one -- a .env, a local settings file -- is not counted here."
     } >&2
+  fi
+
+  if [ "$dirs_unlisted" -eq 1 ]; then
+    echo "could not list $repo's directories, so a directory this run created and left empty may still be there. Everything else is back as it was found." >&2
   fi
 }
 
@@ -828,13 +890,32 @@ snapshot_head_unmoved() { # <repo-path> <snapshot-file>
 # a large object store doesn't get walked for nothing; that leaves the
 # results in parent-before-child order, so they're reversed here to get the
 # deepest-first order rmdir needs.
+#
+# Returns non-zero, having printed whatever it got to, if the walk itself
+# could not be made. An empty answer from here is "this repo has no
+# directories of its own", which is a real answer and a rare one, and both
+# callers act on it: the snapshot records no D records, so every directory in
+# the repo afterwards reads as one the run created, and the rollback prunes
+# the empty ones the operator had. A walk that could not be made has to be
+# told apart from that.
+#
+# The walk is piped into the reversing loop rather than read through
+# `< <(...)`, for the reason changed_since_snapshot gives: a process
+# substitution would throw find's status away, and a `cd` that failed would
+# come back as a repo with no directories in it. The loop needs the whole list
+# in hand before it can print any of it, so it holds an array -- in a subshell
+# of its own, which costs nothing here because it only prints.
 list_repo_dirs() { # <repo-path>
-  local -a dirs=()
-  local d i
-  while IFS= read -r -d '' d; do
-    dirs+=("${d#./}")
-  done < <(cd "$1" && find . -path './.git' -prune -o -type d ! -name . -print0)
-  for (( i = ${#dirs[@]} - 1; i >= 0; i-- )); do
-    printf '%s\0' "${dirs[i]}"
-  done
+  ( cd "$1" && find . -path './.git' -prune -o -type d ! -name . -print0 ) \
+    | {
+        local -a dirs=()
+        local d i
+        while IFS= read -r -d '' d; do
+          dirs+=("${d#./}")
+        done
+        for (( i = ${#dirs[@]} - 1; i >= 0; i-- )); do
+          printf '%s\0' "${dirs[i]}"
+        done
+      }
+  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
 }
