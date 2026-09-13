@@ -263,17 +263,9 @@ modes are supported:
     || echo "could not work out whether this run replaced uncommitted work at $REPO_PATH/$FIXED_PATH" >&2
   ```
 
-  That last note is the one part of this the conformance suite below does
-  *not* hold you to. It checks the pristine-repo obligation, and it checks
-  that a run names the uncommitted work it wrote over — but its dirty-repo
-  case seeds a path of its own rather than your `fixed_path`, so a driver
-  that skipped the note would still pass. The two shipped drivers are held
-  to it by their own tests (`tests/pocock_driver_run.sh`,
-  `tests/spec_kit_driver_run.sh`); a driver you write is on its honour.
-
-  For the drivers Archimedes ships, the pristine-repo obligation is checked
-  rather than taken on trust: `tests/fixed_location_conformance.sh` in the
-  Archimedes repository finds every driver declaring this mode by reading the manifests
+  For the drivers Archimedes ships, all of that is checked rather than taken
+  on trust: `tests/fixed_location_conformance.sh` in the Archimedes
+  repository finds every driver declaring this mode by reading the manifests
   — no list to add one to — points each at a throwaway repo with a stub
   standing in for the CLI it runs, has that stub write past the declared
   `fixed_path` the way a real scaffolder or a real agent session does, and
@@ -287,9 +279,18 @@ modes are supported:
   no driver can undo. What it requires there is the nearest thing that can be
   had: the repo comes back dirty in exactly the way it started dirty, and the
   run *names* the file it wrote over. A driver that tidied up silently around
-  it fails, the same as one that left files behind. All three checks run on
-  every push and cost nothing, and a driver added there needs no test of its
-  own to be held to them.
+  it fails, the same as one that left files behind.
+
+  And last it does that again with the uncommitted work sitting at your own
+  declared `fixed_path`, which is the case the repo afterwards cannot answer:
+  keeping that file is the contract, the harvest then moves it out, and what
+  comes back is pristine — indistinguishable from a run against a repo that
+  never had one. So what is required there is the note: the run has to name
+  the `fixed_path` it replaced. A driver that replaced an operator's
+  half-written map, harvested it away and said nothing fails there, having
+  passed everything above it. All four checks run on every push and cost
+  nothing, and a driver added there needs no test of its own to be held to
+  them.
 
   A driver *you* write here is outside that suite's reach — it runs in the
   Archimedes repository, over the drivers that ship from there — so this
