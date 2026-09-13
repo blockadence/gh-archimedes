@@ -1086,9 +1086,11 @@ Monday.
 Underneath both sits `tests/fixed_location_conformance.sh`, which holds
 every driver declaring `output_mode: fixed-location` to the half of that
 contract Archimedes cannot enforce: the target repo is left exactly as it
-was found apart from the harvested `fixed_path`. It discovers the drivers by
-reading the manifests rather than from a list, so a third one is covered the
-day it declares the mode and without a test of its own.
+was found apart from the harvested `fixed_path`, and whatever of the
+operator's the run could not put back is named rather than tidied away in
+silence. It discovers the drivers by reading the manifests rather than from a
+list, so a third one is covered the day it declares the mode and without a
+test of its own.
 
 It asks that of both ways a run can end, because the promise is made about
 both. A run allowed to finish is the easy half. A run *stopped* — a Ctrl-C,
@@ -1102,6 +1104,34 @@ rather than trusted. `tests/pocock_driver_run.sh` and
 `tests/spec_kit_driver_run.sh` keep their own interrupted cases, in both
 shapes an interrupt arrives in; this is the floor under them, not a
 replacement for them.
+
+Then it asks the same question of the repo an operator actually has — a
+dirty one, with the stub session writing over the part that made it dirty.
+That is the one shape of "as it was found" no driver can deliver, because
+nothing keeps a copy of what an uncommitted file said, so what is required
+there is the nearest thing that can be had: the repo comes back dirty in
+exactly the way it started dirty, and the run *names* the file it wrote over.
+A driver that tidied up silently around it fails, the same as one that left
+files behind.
+
+Twice, because the dirty path that matters most is the driver's own
+`fixed_path`. Work in flight there is replaced by the run and then carried
+out of the repo by the harvest, and every step of that is the run succeeding,
+so the repo comes back pristine with nothing in its state to record that the
+operator ever had a version of their own — all that is left to ask is whether
+the run said so. Then the same question backwards, over a repo with nothing
+of theirs at that path to lose: one that never held a file there, and one
+they had deleted a committed file from without committing the deletion. Those
+runs have to reach a session, succeed, be harvested, and say nothing about
+the path. "The run named its `fixed_path`" is a sentence a banner satisfies
+without ever having looked at what the repo held, which is why the note's
+*when* is asked for as squarely as the note — the driver written to fail
+those two comes through every check above them green. The third state the
+library stays silent in, a file the run rewrote byte for byte, is not
+reachable through a stub session; it is checked against the library itself in
+`tests/repo_snapshot.sh`, the conformance file says why it cannot be asked
+out there, and `template/drivers/README.md` says it is the driver's own to
+keep.
 
 It asks one thing of a driver, which the three shipped ones already do:
 every CLI it runs is named by a `command -v <name>` guard before it touches
