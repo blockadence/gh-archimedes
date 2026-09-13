@@ -79,3 +79,32 @@ func TestRunRenderMapMissingManifestErrors(t *testing.T) {
 		t.Fatal("expected error when repos.yaml is missing, got nil")
 	}
 }
+
+// Through the flag, from the directory the instance sits in: `--root
+// <relative-dir>` is how an operator names an instance they are standing
+// next to, and what comes out has to be the same map, with the same
+// relative links, that an absolute root produces. The flag's own half of
+// what manifest_test.go pins at the seam: nothing between cobra and
+// repos.yaml may quietly need the root to be absolute.
+func TestRenderMapCommandAcceptsARelativeRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "instance")
+	writeFile(t, filepath.Join(root, "repos.yaml"),
+		"repos:\n  - name: service-a\n    path: ../service-a\n    base_branch: main\n")
+
+	t.Chdir(parent)
+
+	execute(t, "render-map", "--root", "instance")
+
+	got, err := os.ReadFile(filepath.Join(root, "WORKSPACE-MAP.md"))
+	if err != nil {
+		t.Fatalf("expected the map to be written under the named instance: %v", err)
+	}
+
+	want := "# Workspace Map\n\n## Repos\n\n" +
+		"- [service-a](../service-a) — base: `main`. Dossier: [repos/service-a.md](./repos/service-a.md)\n" +
+		"\n## Relationships\n"
+	if string(got) != want {
+		t.Errorf("WORKSPACE-MAP.md mismatch\n got: %q\nwant: %q", got, want)
+	}
+}
