@@ -148,18 +148,12 @@ func TestRunPruneStillReadsAnAbsoluteRow(t *testing.T) {
 // path that means the same thing from anywhere -- the same reason
 // `spawn` absolutizes its root before deriving anything from it.
 func TestRunPruneResolvesARelativeRootToAUsablePath(t *testing.T) {
-	parent := t.TempDir()
-	root := filepath.Join(parent, "instance")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	root, typed := instanceBesideCwd(t)
 	_, wt := setupInstance(t, root, "service-a", "widget-fix", "based on main")
-
-	t.Chdir(parent)
 
 	var buf bytes.Buffer
 	merged := func(_, _ string) (string, error) { return "MERGED", nil }
-	if err := runPrune(&buf, "instance", "", true, merged); err != nil {
+	if err := runPrune(&buf, typed, "", true, merged); err != nil {
 		t.Fatalf("runPrune: %v", err)
 	}
 

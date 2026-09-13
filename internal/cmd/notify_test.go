@@ -83,27 +83,19 @@ func TestRunNotifyResolvesPRStateThroughTheManifest(t *testing.T) {
 	}
 }
 
-// A relative --root is the ordinary way to name an instance: the operator
-// stands in the directory holding it and types the directory's name. The
-// repo path a watch resolves against that root goes to git as the working
-// directory it runs *in* -- reading the checkout's origin remote to turn a
-// status.md row's repo name into a pull request lookup -- so relative to
-// the operator's shell is exactly right, and the pass has to come out the
-// same as it does under an absolute root -- the half of the rule
-// loadManifest keeps, and which manifest_test.go pins at the seam itself.
+// The other half of the rule prune's relative-root test pins above: a repo
+// path resolved against the typed root goes to git as the working
+// directory it runs *in* -- here, reading a checkout's origin remote to
+// turn a status.md row's repo name into a pull request lookup -- so it is
+// right for it to stay relative, and a watch named by a relative root has
+// to report what the same instance reports under an absolute one.
 func TestRunNotifyReadsAnInstanceNamedByARelativeRoot(t *testing.T) {
-	parent := t.TempDir()
-	root := filepath.Join(parent, "instance")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	root, typed := instanceBesideCwd(t)
 	setupInstance(t, root, "service-a", "widget-fix", "based on main")
-
-	t.Chdir(parent)
 
 	var buf bytes.Buffer
 	merged := func(_, _ string) (string, error) { return "MERGED", nil }
-	opts := notifyOptions("instance", "", "", false, func(string) string { return "" })
+	opts := notifyOptions(typed, "", "", false, func(string) string { return "" })
 	if err := runNotify(&buf, &bytes.Buffer{}, opts, merged); err != nil {
 		t.Fatalf("runNotify: %v\n%s", err, buf.String())
 	}

@@ -68,3 +68,24 @@ func writeExecutable(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// instanceBesideCwd makes an empty instance directory and leaves the test
+// standing in the directory that holds it, so a subcommand can be given
+// `--root instance` -- the ordinary way to name an instance, and the shape
+// no test used while 46's bug was live, since an absolute t.TempDir hides
+// every question about which working directory a path is true in.
+//
+// Both names come back because the test needs both: the typed one to hand
+// the subcommand, and the absolute one to write assertions against, since
+// what a subcommand does with the typed root is the thing under test.
+func instanceBesideCwd(t *testing.T) (root, typed string) {
+	t.Helper()
+	parent := t.TempDir()
+	typed = "instance"
+	root = filepath.Join(parent, typed)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(parent)
+	return root, typed
+}

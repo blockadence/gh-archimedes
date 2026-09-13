@@ -27,16 +27,14 @@ import (
 // turn.
 //
 // worktree.Resolve is the worked example and the place to copy: it joins
-// a recorded worktree column to the instance root and absolutizes the
-// join, says at the site that what consumes its answer is `git worktree
-// remove` run inside the repo, and so hands back a path that means the
-// same thing from anywhere. Before it did, `prune` under a relative
-// --root passed git a worktree path relative to the operator's shell and
-// removed the right one only because git falls back to matching the
-// suffix of what it has registered (issue 46; the rule itself is issue
-// 59, which manifest.Path cites from the other side, and which
-// workdir.Path restates for work/<slug> — a path an operator reads and
-// this process opens, never one a tool is handed).
+// a recorded worktree column to this root and absolutizes the join,
+// because what consumes its answer is `git worktree remove`, run inside
+// the repo. The reasoning is at that site and the bug that made it
+// necessary is issue 46; what belongs here is that the next
+// instance-relative path somebody resolves has the same question to ask
+// and the same answer — as manifest.Path says from the other side, and as
+// workdir.Path restates for work/<slug>, a path an operator reads and
+// this process opens rather than one a tool is handed (issue 59).
 func loadManifest(root string) (*manifest.Manifest, error) {
 	_, m, err := manifest.LoadInstance(root)
 	return m, err
