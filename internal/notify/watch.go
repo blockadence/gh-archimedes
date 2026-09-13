@@ -199,9 +199,10 @@ func Conditions(root, contextFile string, prState prune.PRStateFunc, progress io
 	watched := func(repo, headBranch string) (string, error) {
 		state, err := prState(repo, headBranch)
 		if err != nil {
-			fmt.Fprintf(progress, "note: could not look up %s:%s's pull request: %v\n", repo, headBranch, err)
+			pair := stackref.Ref{Repo: repo, Slug: headBranch}.String()
+			fmt.Fprintf(progress, "note: could not look up %s's pull request: %v\n", pair, err)
 			snap.Unverified = append(snap.Unverified,
-				Event{Kind: PruneEligible, Subject: stackref.Ref{Repo: repo, Slug: headBranch}.String()}.Key())
+				Event{Kind: PruneEligible, Subject: pair}.Key())
 		}
 		return state, err
 	}
@@ -220,7 +221,7 @@ func Conditions(root, contextFile string, prState prune.PRStateFunc, progress io
 		}
 		snap.Firing = append(snap.Firing, Event{
 			Kind:    PruneEligible,
-			Subject: stackref.Ref{Repo: it.Repo, Slug: it.Slug}.String(),
+			Subject: it.Ref().String(),
 			Detail:  it.PRState,
 			Remedy:  remedyPrune(it.Slug),
 		})

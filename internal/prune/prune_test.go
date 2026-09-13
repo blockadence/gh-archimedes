@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/blockadence/gh-archimedes/internal/prune"
+	"github.com/blockadence/gh-archimedes/internal/stackref"
 	"github.com/blockadence/gh-archimedes/internal/statusfile"
 )
 
@@ -230,5 +231,13 @@ func TestScanRefusesToPruneAStackedBaseWhoseNoteWasRespaced(t *testing.T) {
 		if it.Slug == "widget-fix" && it.Prunable() {
 			t.Errorf("widget-fix is still shim-fix's base; got prunable")
 		}
+	}
+}
+
+func TestItemNamesItselfAsTheRepoSlugPair(t *testing.T) {
+	it := prune.Item{Repo: "service-a", Slug: "widget-fix"}
+
+	if want := (stackref.Ref{Repo: "service-a", Slug: "widget-fix"}); it.Ref() != want {
+		t.Errorf("Item.Ref() = %+v, want %+v", it.Ref(), want)
 	}
 }

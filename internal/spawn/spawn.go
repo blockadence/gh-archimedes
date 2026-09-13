@@ -210,8 +210,8 @@ func openWorkspace(opts Options, repoPath, wt string, out, progress io.Writer) {
 		Path:     wt,
 		// One slug can be spawned into several repos, so the repo name is
 		// part of the label — the same "<repo>:<slug>" shape --stack-on
-		// parses.
-		Label: opts.Repo + ":" + opts.Slug,
+		// parses, from the package that owns it rather than joined here.
+		Label: stackref.Ref{Repo: opts.Repo, Slug: opts.Slug}.String(),
 		Focus: opts.Focus,
 	}
 	// Not having the tool installed is the expected state on most machines
