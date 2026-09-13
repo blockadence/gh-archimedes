@@ -960,6 +960,71 @@ assert_eq "$(printf 'scratch-note.md\0' | fingerprint_paths "$REPO17" | tr '\0' 
 unset -f mktemp
 
 echo ""
+echo "repo snapshot, a machine that has run out of temp files:"
+
+# The spool the sentence above turns on, held to by every helper that does it.
+#
+# `mktemp`, redirect a producer into it, carry a failure out, read it back,
+# remove it: that idiom is written out six times in repo-snapshot.sh, once per
+# helper that reads a producer, and six copies of a failure path is the shape
+# that file's own header warns about -- "a second copy of this would be the
+# one that drifts, and it would drift on the failure path, where nobody is
+# watching". The drift that matters is a seventh copy written without the
+# `|| return 1`, which is the silent-success bug 74, 77 and 82 were each filed
+# against, reintroduced one function at a time.
+#
+# Sharing the idiom is not the answer. Bash cannot be handed a loop body, so
+# what could be extracted is the two lines either side of the part that
+# differs -- and moving those away from the comment explaining why *that*
+# particular read must not be a process substitution costs more than the
+# repetition does. So the property is held to instead of the code being
+# shared, and a seventh helper is one more line here.
+#
+# Asked of every one of them in a loop rather than six blocks, because "every
+# one of them, including the next" is the whole of what this checks.
+REPO26="$WORK/repo26"
+mkdir -p "$REPO26"
+echo "# readme" > "$REPO26/README.md"
+printf '.env\n' > "$REPO26/.gitignore"
+make_repo_at "$REPO26"
+
+# Uncommitted work of both kinds, and the snapshot taken while mktemp still
+# works. Two of these helpers reach their mktemp only when the snapshot gave
+# them something to fingerprint, so a repo with nothing in flight would pass
+# this without ever having got as far as the line under test: a B record for
+# the untracked note, a G one for the .env.
+echo "notes to self" > "$REPO26/scratch-note.md"
+echo "API_KEY=the-real-one" > "$REPO26/.env"
+SNAP26="$WORK/snapshot26"
+snapshot_repo_state "$REPO26" > "$SNAP26"
+
+# And a run, so there is something for each of them to have to report.
+echo "the map" > "$REPO26/CONTEXT.md"
+echo "helpfully rewritten" > "$REPO26/scratch-note.md"
+
+mktemp() { return 1; }
+for fn in snapshot_repo_state changed_since_snapshot overwritten_since_snapshot \
+          paths_changed_since_snapshot report_kept_paths_replaced \
+          restore_repo_state; do
+  case "$fn" in
+    # The one that is handed a repo rather than a snapshot of one.
+    snapshot_repo_state) "$fn" "$REPO26" ;;
+    # And the one whose arguments are the paths to ask about rather than the
+    # paths to skip -- handed a fingerprinted one, or it would return zero
+    # having found nothing to compare and never reached its mktemp at all.
+    overwritten_since_snapshot) "$fn" "$REPO26" "$SNAP26" scratch-note.md ;;
+    *) "$fn" "$REPO26" "$SNAP26" CONTEXT.md ;;
+  esac >/dev/null 2>&1
+  mktemp_status=$?
+  if [ "$mktemp_status" -eq 0 ]; then
+    fail "$fn carries a temp file it could not get out as a status, rather than as the short answer that reads as good news"
+  else
+    pass "$fn carries a temp file it could not get out as a status, rather than as the short answer that reads as good news"
+  fi
+done
+unset -f mktemp
+
+echo ""
 echo "repo snapshot, a read of the repo that could not be made:"
 
 # The other three producers read the same way the fingerprinting was, and with
