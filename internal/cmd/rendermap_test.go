@@ -79,3 +79,28 @@ func TestRunRenderMapMissingManifestErrors(t *testing.T) {
 		t.Fatal("expected error when repos.yaml is missing, got nil")
 	}
 }
+
+// The same, reached through the flag rather than around it: `--root
+// instance` typed at a cobra command, from the directory the instance sits
+// in. What it pins is that nothing between the flag and the written file
+// needs the root to be absolute -- the map is created under the instance
+// named, not under the working directory the command was run from.
+func TestRenderMapCommandAcceptsARelativeRoot(t *testing.T) {
+	root, typed := instanceBesideCwd(t)
+	writeFile(t, filepath.Join(root, "repos.yaml"),
+		"repos:\n  - name: service-a\n    path: ../service-a\n    base_branch: main\n")
+
+	execute(t, "render-map", "--root", typed)
+
+	got, err := os.ReadFile(filepath.Join(root, "WORKSPACE-MAP.md"))
+	if err != nil {
+		t.Fatalf("expected the map to be written under the named instance: %v", err)
+	}
+
+	want := "# Workspace Map\n\n## Repos\n\n" +
+		"- [service-a](../service-a) \u2014 base: `main`. Dossier: [repos/service-a.md](./repos/service-a.md)\n" +
+		"\n## Relationships\n"
+	if string(got) != want {
+		t.Errorf("WORKSPACE-MAP.md mismatch\n got: %q\nwant: %q", got, want)
+	}
+}

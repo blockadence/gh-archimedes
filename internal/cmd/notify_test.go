@@ -82,3 +82,29 @@ func TestRunNotifyResolvesPRStateThroughTheManifest(t *testing.T) {
 		t.Errorf("a watch must not remove anything, stat worktree = %v", err)
 	}
 }
+
+// The other half of the rule prune's relative-root test pins above: a repo
+// path resolved against the typed root goes to git as the working
+// directory it runs *in* -- here, reading a checkout's origin remote to
+// turn a status.md row's repo name into a pull request lookup -- so it is
+// right for it to stay relative, and a watch named by a relative root has
+// to report what the same instance reports under an absolute one.
+func TestRunNotifyReadsAnInstanceNamedByARelativeRoot(t *testing.T) {
+	root, typed := instanceBesideCwd(t)
+	setupInstance(t, root, "service-a", "widget-fix", "based on main")
+
+	var buf bytes.Buffer
+	merged := func(_, _ string) (string, error) { return "MERGED", nil }
+	opts := notifyOptions(typed, "", "", false, func(string) string { return "" })
+	if err := runNotify(&buf, &bytes.Buffer{}, opts, merged); err != nil {
+		t.Fatalf("runNotify: %v\n%s", err, buf.String())
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Ready to prune: service-a:widget-fix") {
+		t.Errorf("missing the merged unit of work, got:\n%s", out)
+	}
+	if _, err := os.Stat(filepath.Join(root, notify.DefaultStateFile)); err != nil {
+		t.Errorf("state file not written beside the instance's repos.yaml: %v", err)
+	}
+}

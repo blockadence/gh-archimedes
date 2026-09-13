@@ -164,6 +164,11 @@ func TestInitSaysWhyGitRefusedTheCommitAndKeepsTheInstance(t *testing.T) {
 			t.Errorf("output does not say %q:\n%s", want, out)
 		}
 	}
+	// Quoted rather than framed: git's words are set in from the tool's
+	// own, which is what says whose sentence it is (issue 79).
+	if !strings.Contains(out, "\ngit reported:\n\n  "+testrepo.RefusedCommitMessage+"\n") {
+		t.Errorf("output does not set git's own words in from the tool's:\n%s", out)
+	}
 	// Raw git output as the first thing the tool says is the whole of what
 	// this replaced, and our own wrapping of it is the tell.
 	if strings.Contains(out, "exit status") {
