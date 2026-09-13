@@ -274,11 +274,17 @@ func TestRunPruneForceKeepsGoingPastAWorktreeGitWillNotRemove(t *testing.T) {
 	if !strings.Contains(out, "at "+removable+"\n  removed.") {
 		t.Errorf("expected the candidate after it to be marked removed, got:\n%s", out)
 	}
-	// Git's own sentence, with none of prune's wrapping around it: the
-	// operator typed --force at their own checkout, and what they typed is
-	// the context that makes git's objection readable (issue 47).
-	if !strings.Contains(out, "git worktree remove "+locked+" --force:") || !strings.Contains(out, "cannot remove a locked working tree") {
-		t.Errorf("expected git's own words under the failed candidate, got:\n%s", out)
+	// Git's own sentence, unframed: the operator typed --force at their own
+	// checkout, and what they typed is the context that makes git's
+	// objection readable (issue 47). Quoted rather than rewritten, which is
+	// what the depth says — a step in from the `  not removed:` that
+	// introduces it, which is itself a step in under the candidate, so what
+	// is asserted here is both of those steps (issue 79).
+	if !strings.Contains(out, "\n  not removed:\n    git worktree remove "+locked+" --force:") {
+		t.Errorf("expected git's own words a step under the failed candidate's notice, got:\n%s", out)
+	}
+	if !strings.Contains(out, "cannot remove a locked working tree") {
+		t.Errorf("expected git's own reason under the failed candidate, got:\n%s", out)
 	}
 }
 
