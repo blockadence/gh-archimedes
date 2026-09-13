@@ -945,13 +945,23 @@ case rather than the milder one: it is `workflow_dispatch` and a weekly
 cron, so it is the file that gets discovered broken by a report nobody is
 reading.
 
-The versions:
+What the three of them run, and what for. `test.yml` is the push check and
+`release.yml`'s gate: `actions/setup-go` off `go.mod`, then the two suites.
+`release.yml` calls that same job and, once it passes, hands publishing to
+`cli/gh-extension-precompile`, which creates the draft release and attaches
+the binaries `.github/release-build.sh` built for it. `live-drivers.yml` is
+the billed suite, on a weekly cron and a `workflow_dispatch`, so it installs
+the most: `actions/setup-go` for the driver tests, `actions/setup-node` for
+the `claude` CLI they drive headlessly, and `astral-sh/setup-uv` for the
+`specify` CLI the spec-kit driver unpacks. All three start with
+`actions/checkout`.
 
-| file | actions |
-|---|---|
-| `test.yml` | `actions/checkout@v7`, `actions/setup-go@v7` |
-| `release.yml` | `actions/checkout@v7`, `cli/gh-extension-precompile@v2` |
-| `live-drivers.yml` | `actions/checkout@v7`, `actions/setup-go@v7`, `actions/setup-node@v7`, `astral-sh/setup-uv@v10.0.1` |
+Which release each of those is on is in the workflow file that runs it, and
+is deliberately not repeated here: Dependabot bumps those lines on a
+cadence (below), and a list on this page would be the copy nothing checks.
+What is written down instead is the floors, in `tests/ci_action_runtimes.sh`
+— that table is the record of someone having read an upstream `action.yml`,
+and it is the one to read when deciding whether a version is safe.
 
 The test records a floor per action — the lowest major whose `action.yml`
 says `runs: using: node24` — rather than the exact version in the tree, so a
@@ -964,25 +974,25 @@ then by a real run of each of the three files reporting no annotation. Read
 the run rather than trusting the bump: a green square is not the evidence,
 the absence of the warning on the job is.
 
-`cli/gh-extension-precompile@v2` is the one action here we do not control,
-and the answer for it is that it was never affected: it is a composite
-action, so there is no Node runtime under it to deprecate — which is why the
-annotation on `release.yml` named only `actions/checkout` — and its own
-nested actions are SHA-pinned upstream and already on node24. It is
-deliberately not bumped. A bump would mean re-reading its changelog for what
-it does with `generate_attestations` and `draft_release`, which is the one
-failure mode in this repository that publishes the wrong thing rather than
-nothing, and the deprecation gives no reason to take that on.
+`cli/gh-extension-precompile` is the one action here we do not control, and
+the answer for it is that it was never affected: it is a composite action, so
+there is no Node runtime under it to deprecate — which is why the annotation
+on `release.yml` named only `actions/checkout` — and its own nested actions
+are SHA-pinned upstream and already on node24. It is deliberately not
+bumped. A bump would mean re-reading its changelog for what it does with
+`generate_attestations` and `draft_release`, which is the one failure mode
+in this repository that publishes the wrong thing rather than nothing, and
+the deprecation gives no reason to take that on.
 
-`astral-sh/setup-uv` is the one step named by full version (`@v10.0.1`)
-rather than by floating major, and that is upstream's doing rather than a
-pinning policy of ours: that action stopped publishing major tags with its
-v8 release, so `@v7` is the newest floating major that exists and its line
-has had no release since March 2026 — staying on it would mean sitting on a
-branch that will not get the next deprecation's fix. Deliberately not done
-anywhere here: pinning actions to commit SHAs. That is a supply-chain
-decision with its own argument and its own maintenance cost, and it is not
-what the deprecation was asking for.
+`astral-sh/setup-uv` is the one step named by a full version rather than by
+a floating major, and that is upstream's doing rather than a pinning policy
+of ours: that action stopped publishing major tags with its v8 release, so
+`@v7` is the newest floating major that exists and its line has had no
+release since March 2026 — staying on it would mean sitting on a branch that
+will not get the next deprecation's fix. Deliberately not done anywhere
+here: pinning actions to commit SHAs. That is a supply-chain decision with
+its own argument and its own maintenance cost, and it is not what the
+deprecation was asking for.
 
 #### What watches upstream, and which half is load-bearing
 
