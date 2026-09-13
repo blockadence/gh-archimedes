@@ -30,6 +30,10 @@ func ParseFlag(value string) Ref {
 // a note carries, and how any other reader names one unit of work in one
 // repo. Here rather than formatted at each call site for the same reason
 // the note's wording is: the pair's shape has one owner.
+// That includes the pair inside an English sentence, the one case that
+// looked like an exception: an operator who cannot tell one line's
+// service-a:widget-fix from the next one's is being told they are the same
+// thing by the formatting rather than by anything that holds (issue 78).
 func (r Ref) String() string { return r.Repo + ":" + r.Slug }
 
 // notePrefix opens every note describing a stacked branch. Anything else

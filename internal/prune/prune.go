@@ -35,6 +35,11 @@ type Item struct {
 	Blockers   []string // status.md paths that still name this repo:slug as a stacked base
 }
 
+// Ref is the "<repo>:<slug>" pair naming this candidate, from the package
+// that owns that shape. Item keeps the two halves apart because removing a
+// worktree needs them apart; naming the candidate goes through here.
+func (it Item) Ref() stackref.Ref { return stackref.Ref{Repo: it.Repo, Slug: it.Slug} }
+
 // Prunable reports whether nothing still depends on this repo:slug as a
 // stacked base.
 func (it Item) Prunable() bool { return len(it.Blockers) == 0 }
