@@ -10,7 +10,6 @@ import (
 	"github.com/blockadence/gh-archimedes/internal/gitutil"
 	"github.com/blockadence/gh-archimedes/internal/manifest"
 	"github.com/blockadence/gh-archimedes/internal/prune"
-	"github.com/blockadence/gh-archimedes/internal/stackref"
 )
 
 func newPruneCmd() *cobra.Command {
@@ -74,12 +73,12 @@ func runPrune(out io.Writer, root, slugFilter string, force bool, ghState prune.
 
 	for _, it := range items {
 		if !it.Prunable() {
-			fmt.Fprintf(out, "SKIP %s:%s (%s), still a base for: %s. Rebase that one first.\n",
-				it.Repo, it.Slug, it.PRState, strings.Join(it.Blockers, ", "))
+			fmt.Fprintf(out, "SKIP %s (%s), still a base for: %s. Rebase that one first.\n",
+				it.Ref(), it.PRState, strings.Join(it.Blockers, ", "))
 			continue
 		}
 
-		fmt.Fprintf(out, "PRUNE CANDIDATE: %s:%s (%s) at %s\n", it.Repo, it.Slug, it.PRState, it.Worktree)
+		fmt.Fprintf(out, "PRUNE CANDIDATE: %s (%s) at %s\n", it.Ref(), it.PRState, it.Worktree)
 		if !force {
 			continue
 		}
@@ -92,7 +91,7 @@ func runPrune(out io.Writer, root, slugFilter string, force bool, ghState prune.
 			// step in from the line that introduces it, so a reason
 			// running to several lines still reads as one entry's — which
 			// is the nesting indentUnder holds.
-			failed = append(failed, stackref.Ref{Repo: it.Repo, Slug: it.Slug}.String())
+			failed = append(failed, it.Ref().String())
 			fmt.Fprintf(out, "  not removed:\n%s\n", indentUnder(err.Error()))
 			continue
 		}

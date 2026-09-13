@@ -222,11 +222,13 @@ reaches no billed API, so a release never waits on somebody else's service.
 The billed half — the two live driver tests — is a `workflow_dispatch` away
 and worth running by hand first; see [The live driver tests](#the-live-driver-tests).
 
-`cli/gh-extension-precompile` builds the platform matrix, creates the
-release as a draft, and attaches the binaries; the workflow's own last step
-verifies them and promotes the draft. A tag containing a `-`
-(`v0.2.0-rc.1`) publishes as a prerelease, which `gh extension install`
-will not hand to anyone — the safe way to exercise the workflow end to end.
+`.github/release-build.sh` builds the platform matrix; the workflow hands it
+to the action as `build_script_override`. `cli/gh-extension-precompile`
+creates the release as a draft and attaches the binaries it is handed; the
+workflow's own last step verifies them and promotes the draft. A tag
+containing a `-` (`v0.2.0-rc.1`) publishes as a prerelease, which `gh
+extension install` will not hand to anyone — the safe way to exercise the
+workflow end to end.
 
 With one exception, and it is the same property from the other side: a
 prerelease cannot be installed as an extension *at all*, so the rehearsal

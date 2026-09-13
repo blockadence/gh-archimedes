@@ -287,6 +287,27 @@ func failedLookup(_, _ string) (string, error) {
 	return "NONE", errors.New("gh: could not authenticate")
 }
 
+func TestConditionsNamesAnUnanswerableLookupTheWayItNamesTheCondition(t *testing.T) {
+	inst := newInstance(t)
+	inst.spawned(t, "widget-fix", "based on main")
+
+	var progress bytes.Buffer
+	snap, err := notify.Conditions(inst.root, "", failedLookup, &progress)
+	if err != nil {
+		t.Fatalf("Conditions: %v", err)
+	}
+
+	// The note the operator reads and the key the pass carries forward are
+	// the same unit of work, so they name it the same way.
+	if !strings.Contains(progress.String(), "note: could not look up app:widget-fix's pull request: ") {
+		t.Errorf("progress does not name app:widget-fix the way a condition is named:\n%s", progress.String())
+	}
+	want := notify.Event{Kind: notify.PruneEligible, Subject: "app:widget-fix"}.Key()
+	if len(snap.Unverified) != 1 || snap.Unverified[0] != want {
+		t.Errorf("Unverified = %q, want [%q]", snap.Unverified, want)
+	}
+}
+
 func TestWatchDoesNotRebreakPruneNewsAPassCouldNotVerify(t *testing.T) {
 	inst := newInstance(t)
 	inst.spawned(t, "widget-fix", "based on main")
