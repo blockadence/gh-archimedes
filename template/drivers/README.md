@@ -239,6 +239,28 @@ modes are supported:
   `fixed_path` is not kept, and by the time the rollback runs it has already
   gone. Commit it first if you want to keep it.
 
+  **That note has a *when*, and the when is as much of the obligation as the
+  note is.** It is owed on a run that replaced a version of that file you
+  had in flight, and it is owed *only* there — `report_kept_paths_replaced`
+  stays silent in three states, each of which is a run with nothing to tell
+  you:
+
+  - the repo had no file of its own at that path, which is every repo you
+    have not run one of these against before;
+  - the run rewrote it byte for byte, so it still says what it said; and
+  - you had deleted a committed one without committing the deletion, and the
+    run writes one that the harvest then carries straight back out, leaving
+    the path exactly where you left it.
+
+  A driver that printed the path on every run instead — a banner, a `wrote
+  CONTEXT.md` line, a progress message — satisfies "the run named the
+  `fixed_path`" without ever having worked out whether anything of yours was
+  there, and by the time the word means something nobody is reading it. So
+  call the helper and let it decide; do not print the file's name beside it
+  on your own account. Two of those three silences are held to in the
+  conformance suite below; the byte-for-byte one is yours to keep, for the
+  reason given there.
+
   **Every one of those answers can also come back as "I could not find
   out", and a driver has to keep that apart from "there was nothing to
   find".** They are lists of paths, so the answer meaning *the run touched
@@ -281,16 +303,34 @@ modes are supported:
   run *names* the file it wrote over. A driver that tidied up silently around
   it fails, the same as one that left files behind.
 
-  And last it does that again with the uncommitted work sitting at your own
+  Then it does that again with the uncommitted work sitting at your own
   declared `fixed_path`, which is the case the repo afterwards cannot answer:
   keeping that file is the contract, the harvest then moves it out, and what
   comes back is pristine — indistinguishable from a run against a repo that
   never had one. So what is required there is the note: the run has to name
   the `fixed_path` it replaced. A driver that replaced an operator's
   half-written map, harvested it away and said nothing fails there, having
-  passed everything above it. All four checks run on every push and cost
-  nothing, and a driver added there needs no test of its own to be held to
-  them.
+  passed everything above it.
+
+  And last it asks for the note's *when* — twice, over a repo that had nothing
+  of yours at that path to lose: one that never held a file there, and one you
+  had deleted a committed file from without committing the deletion. Those
+  runs have to succeed, be harvested, and say nothing about the path. A driver
+  that names its `fixed_path` on every run passes every check above this one,
+  the note included, without ever having looked at what the repo held — so
+  that is the driver written to fail this, and it is caught here and nowhere
+  else.
+
+  The third silence — a file the run rewrote byte for byte — is not asked for
+  out there, and the omission is stated rather than quiet. Arranging it needs
+  to know how many times a driver runs its session, since only the last write
+  decides the contents, and a stub that wrote the same bytes on every call
+  would hand `spec-kit` a session that produced exactly the template `specify
+  init` scaffolded, which that driver fails the run over by design. It is
+  checked against the library instead, in `tests/repo_snapshot.sh`, so calling
+  `report_kept_paths_replaced` gets it right for you — and printing the path
+  yourself does not. All six checks run on every push and cost nothing, and a
+  driver added there needs no test of its own to be held to them.
 
   A driver *you* write here is outside that suite's reach — it runs in the
   Archimedes repository, over the drivers that ship from there — so this

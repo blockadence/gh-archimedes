@@ -49,7 +49,7 @@
 # shipped driver writes anything itself, so for them it covers the whole of
 # the ordering.
 #
-# And it is asked, last, of the repo an operator actually has -- a dirty one,
+# And it is asked, next, of the repo an operator actually has -- a dirty one,
 # with the session writing over the part that made it dirty. That is the one
 # shape of "as it was found" no driver can deliver, because nothing keeps a
 # copy of what an uncommitted file said, so what is required there is the
@@ -68,6 +68,24 @@
 # is asked here rather than a driver at a time for the reason above -- the
 # last obligation of this contract left to the per-driver tests was broken by
 # both shipped drivers at once.
+#
+# And then twice more with nothing of the operator's at that path at all,
+# because "the run named the fixed_path" is a sentence a driver can satisfy
+# without having looked. A banner, a `wrote CONTEXT.md` line, a progress
+# message: any of them names the path on every run, and none of them has
+# worked out whether anything of the operator's was there. The failure path
+# is worse -- both shipped drivers name the fixed_path in the message they
+# abort with -- so a run that died inside its session says the word for a
+# reason that has nothing to do with the note. What makes the note worth
+# printing is that a run with nothing to say stays quiet, which is the half
+# drivers/lib/repo-snapshot.sh states at report_kept_paths_replaced: "A note
+# printed on every run is a note nobody reads by the time it means
+# something." So the same run is asked of a repo that never had a file at
+# that path, and of one whose only version of it the operator had deleted
+# without committing the deletion, and in both the run has to reach a
+# session, succeed, be harvested, and not mention the path. Which of the
+# three silences that library keeps are reachable from out here, and why the
+# third is not, is at assert_said_nothing_about_the_file_it_was_run_for.
 #
 # This is a floor, not a replacement. What each driver does about the
 # leftovers it finds is its own business and the two shipped ones answer
@@ -323,12 +341,18 @@ case "$CONFORMANCE_SESSION_SHAPE" in
     exit 0
     ;;
   stops)
-    # For the run that asks whether a driver says anything about the
-    # operator's own copy of the file it was run for: that file has just
-    # been replaced, and nothing else has happened. The note being asked
-    # about is printed on the driver's success path, so this shape has to
-    # reach one -- a session that wrote past the map hands pocock a run to
-    # fail, and a failed run never gets there.
+    # For the runs that ask what a driver says about the operator's own copy
+    # of the file it was run for: that file has just been written, and
+    # nothing else has happened. The note being asked about is printed on the
+    # driver's success path, so this shape has to reach one -- a session that
+    # wrote past the map hands pocock a run to fail, and a failed run never
+    # gets there.
+    #
+    # Three cases share it, and they differ only in what the repo held at
+    # that path before the write: the operator's half-finished version of it,
+    # their deletion of it, or nothing at all. What the session does is the
+    # same in each, which is the point -- the note is the driver's reading of
+    # the repo it was handed, not of anything the session told it.
     exit 0
     ;;
   *)
@@ -404,11 +428,13 @@ STUB
 # as a pass differs between the drivers this holds to the contract and the
 # deliberately broken ones that prove it can tell.
 #
-# Two of the four shapes seed the repo with work the operator had left
+# Two of the six shapes seed the repo with work the operator had left
 # uncommitted, which the stub session then writes over, and neither can share
 # the verdict above -- one is meant to come back dirty in exactly the way it
 # started dirty, and the other is about what the run *said* rather than what
-# it left. Each has a verdict of its own below.
+# it left. Two more are about what the run did *not* say, and one of those
+# seeds the repo too, with the operator's own deletion of that file. Each has
+# a verdict of its own below.
 #
 # Returns non-zero, silently, only when the check cannot be carried out at
 # all -- the driver names no CLI to stand in for.
@@ -417,8 +443,9 @@ start_run() { # <drivers-dir> <driver-name> <shape>
   local session
   # What each shape asks of the session. Two vocabularies and not one: these
   # are the cases this file is about, and the values on the right are what a
-  # stub in another process does about them, which is a smaller set -- two of
-  # the four want the same session.
+  # stub in another process does about them, which is a smaller set -- three
+  # of the six want the same obedient session, and two want the same
+  # misbehaving one.
   case "$shape" in
     # A session that writes past the map, against the repo as the fixture
     # builds it.
@@ -433,6 +460,14 @@ start_run() { # <drivers-dir> <driver-name> <shape>
     # the session replaces and the harvest then carries out of the repo. An
     # obedient session, for the reason given at the stub's branch.
     over-the-fixed-path) session=stops ;;
+    # And the two that ask the other half of that same question -- a run the
+    # note must not be printed on, because the repo held nothing of the
+    # operator's at that path to lose. The obedient session again, and for a
+    # reason each of them needs twice over: the note comes off the success
+    # path, and a run that failed instead would name the fixed_path anyway in
+    # the message it aborts with, which is how both shipped drivers abort.
+    nothing-at-the-fixed-path)  session=stops ;;
+    deletion-at-the-fixed-path) session=stops ;;
     *) fail "start_run: asked for a shape nothing writes, $shape"; return 1 ;;
   esac
   SESSION_HANGING="$WORK/hanging-$name"
@@ -477,6 +512,30 @@ start_run() { # <drivers-dir> <driver-name> <shape>
       mkdir -p "$(dirname "$REPO/$fixed")"
       printf '%s\n' "the map I was half way through writing" > "$REPO/$fixed"
       ;;
+    deletion-at-the-fixed-path)
+      # A version of that file the operator committed and then deleted
+      # without committing the deletion: a path git holds contents for and
+      # does not have in the working tree. Writing one is not a loss there,
+      # and that is the point of the case -- the harvest moves the run's copy
+      # straight back out, so the repo ends exactly where the operator left
+      # it, and a driver that announced a loss would be announcing one that
+      # did not happen.
+      #
+      # The directories the seeding made go with the file, the way `git rm`
+      # would have taken them. What creates them again is then the run, and
+      # archimedes prunes what the harvest empties -- so the repo handed over
+      # and the repo handed back are the same repo, which is what lets the
+      # verdict below ask about the note rather than about directories.
+      mkdir -p "$(dirname "$REPO/$fixed")"
+      printf '%s\n' "the map as I committed it" > "$REPO/$fixed"
+      git -C "$REPO" add -- "$fixed"
+      git -C "$REPO" commit -q -m "the map the operator committed" -- "$fixed"
+      rm -f "$REPO/$fixed"
+      [ "$(dirname "$fixed")" = "." ] \
+        || ( cd "$REPO" && rmdir -p "$(dirname "$fixed")" 2>/dev/null )
+      ;;
+    # nothing-at-the-fixed-path wants the repo the fixture builds, which has
+    # never had a file at any driver's fixed_path, and says nothing here.
   esac
   rm -f "$SESSION_LOG" "$SESSION_LOG.calls" "$WORK/harvested.md" \
     "$SESSION_HANGING" "$SESSION_HANGING.expired"
@@ -535,6 +594,25 @@ run_over_prior_work() {
 # <drivers-dir> <driver-name>
 run_over_work_at_the_fixed_path() {
   start_run "$1" "$2" over-the-fixed-path || return 1
+  wait "$ARCHIMEDES_PID" 2>/dev/null
+  return 0
+}
+
+# And the two runs the note must not come out of, which are the same run
+# against a repo holding nothing of the operator's at the path it was run for:
+# one that never had a file there, and one whose only version of it the
+# operator had deleted without committing the deletion. The session obeys in
+# both, for the reason the shape above needs it to -- the note is a thing said
+# on a success path. <drivers-dir> <driver-name>
+run_with_nothing_at_the_fixed_path() {
+  start_run "$1" "$2" nothing-at-the-fixed-path || return 1
+  wait "$ARCHIMEDES_PID" 2>/dev/null
+  return 0
+}
+
+# <drivers-dir> <driver-name>
+run_over_a_deleted_fixed_path() {
+  start_run "$1" "$2" deletion-at-the-fixed-path || return 1
   wait "$ARCHIMEDES_PID" 2>/dev/null
   return 0
 }
@@ -740,6 +818,91 @@ assert_named_the_file_it_was_run_for() {
   fi
 }
 
+# The verdict on the two passes the note must *not* come out of: the run was
+# handed a repo holding nothing of the operator's at the path it was run for,
+# so naming that path would be announcing a loss that did not happen.
+#
+# Written as the pass above written backwards, rather than as a grep of its
+# own, because this is the one question on this floor a driver can satisfy by
+# doing less. Every way a run can end early is silent about the fixed_path for
+# reasons that have nothing to do with the note -- a driver that refused at a
+# dependency check, a session that never ran -- and each of those reads as a
+# pass unless the run is pinned down first. So the session has to have written
+# the map, the repo has to come back the way it was handed over, and the run
+# has to have succeeded far enough that archimedes harvested a map out of it.
+# Only then is the silence the driver having looked and had nothing to say.
+#
+# The inverse of the failure path 73 named, and pinned the same way: both
+# shipped drivers name the fixed_path in the message they abort with, so a run
+# that died inside its session would *fail* this while satisfying 73's pass,
+# and the harvest is what tells the two apart in both directions.
+#
+# Two of the three silences drivers/lib/repo-snapshot.sh keeps are asked for
+# here: a repo that never had a file at that path, and one the operator had
+# deleted a committed file from without committing the deletion. The third --
+# a file the run rewrote byte for byte, which still says what it said -- is
+# not reachable from out here, and this is the stated reason rather than an
+# omission. Arranging it means knowing how many times a driver runs its
+# session, since only the last write decides the contents, and a stub that
+# wrote the same bytes on every call instead would hand spec-kit's driver a
+# session that produced exactly the template `specify init` scaffolded, which
+# that driver fails the run over by design. So it is covered where the
+# comparison lives -- tests/repo_snapshot.sh, over the library both shipped
+# drivers call -- and template/drivers/README.md says it is one a driver you
+# write keeps on its own.
+#
+# <driver-name> <fixed-path> <what-the-repo-had-there> <the-status-it-comes-back-in>
+assert_said_nothing_about_the_file_it_was_run_for() {
+  local name="$1" fixed="$2" had="$3" status="$4"
+  if session_wrote "$fixed"; then
+    pass "$name: the run reached a session, and the session wrote its own $fixed into a repo that $had"
+  else
+    fail "$name: the run reached a session, and the session wrote its own $fixed into a repo that $had"
+    cat "$WORK/run.log" >&2
+  fi
+
+  # The repo handed back, which for both of these is the repo handed over: the
+  # run's own copy of the file is what the harvest takes, and the directories
+  # made for it are what archimedes prunes once it has. So `ls` is
+  # WIDGET_REPO_PRISTINE in both. The status is not, and that is the other
+  # half of the deleted case -- the operator's uncommitted deletion is work of
+  # theirs like any other, and it has to still be there afterwards.
+  assert_eq "$(widget_repo_leftovers "$REPO")" "$WIDGET_REPO_PRISTINE" \
+    "$name, over a repo that $had: nothing is left in the repo but what it started with"
+  assert_eq "$(git -C "$REPO" status --porcelain)" "$status" \
+    "$name, over a repo that $had: the repo comes back in exactly the state the run was handed it in"
+  assert_file_exists "$WORK/harvested.md" \
+    "$name: the run succeeded and the map was harvested -- the note is said on the success path, so a run that ended any other way would be silent for a reason that is not this one"
+
+  if grep -qF "$fixed" "$WORK/run.log" 2>/dev/null; then
+    fail "$name: the run says nothing about $fixed, having been handed a repo that $had"
+    cat "$WORK/run.log" >&2
+  else
+    pass "$name: the run says nothing about $fixed, having been handed a repo that $had"
+  fi
+}
+
+# The same two passes seen from the other side, for a driver written to fail
+# them. Written once because the two are one question asked of two repos, and
+# a driver that prints the note whether or not there was anything to print it
+# about fails both off the same line of its own.
+#
+# The harvest is checked here too, and for the mirror of the reason it is
+# checked above: a run that failed names the fixed_path in the message it
+# aborts with, which is how both shipped drivers abort, so a driver caught
+# without one would be caught for the wrong thing.
+# <driver-name> <fixed-path> <what-the-repo-had-there>
+assert_caught_saying_it_anyway() {
+  local name="$1" fixed="$2" had="$3"
+  if session_wrote "$fixed" && [ -f "$WORK/harvested.md" ] \
+     && grep -qF "$fixed" "$WORK/run.log" 2>/dev/null; then
+    pass "$name: a driver that names $fixed on a successful run over a repo that $had is caught -- which is what makes the silences above mean anything"
+  else
+    fail "$name: a driver that names $fixed on a successful run over a repo that $had is caught (it said nothing, or the run reached no harvest, so this check cannot tell)"
+    cat "$WORK/run.log" >&2
+  fi
+}
+
 # Stop a run and say so if it could not be stopped, leaving the caller to
 # judge only the runs there is something to judge. Every caller is in the
 # same position by the time it gets here -- a refusal cannot arise, since
@@ -800,6 +963,22 @@ while IFS= read -r name; do
   run_over_work_at_the_fixed_path "$ROOT/drivers" "$name" \
     || fail "$name: names every CLI it runs, so a stub session can be stood up for it"
   assert_named_the_file_it_was_run_for "$name" "$fixed_path"
+
+  echo ""
+  echo "$name, run against a repo that never had a $fixed_path of its own:"
+
+  run_with_nothing_at_the_fixed_path "$ROOT/drivers" "$name" \
+    || fail "$name: names every CLI it runs, so a stub session can be stood up for it"
+  assert_said_nothing_about_the_file_it_was_run_for "$name" "$fixed_path" \
+    "never had a file at $fixed_path" ""
+
+  echo ""
+  echo "$name, run against a repo the operator had deleted $fixed_path from:"
+
+  run_over_a_deleted_fixed_path "$ROOT/drivers" "$name" \
+    || fail "$name: names every CLI it runs, so a stub session can be stood up for it"
+  assert_said_nothing_about_the_file_it_was_run_for "$name" "$fixed_path" \
+    "held the operator's own uncommitted deletion of $fixed_path" " D $fixed_path"
 done <<< "$SHIPPED"
 
 echo ""
@@ -944,6 +1123,79 @@ restore_repo_state "$REPO_PATH" "$SNAPSHOT" "$FIXED"
 RESTORE_ON_EXIT=0
 DRIVER
 
+# Keeps the whole of the pristine-repo contract, on every path a run can end
+# on, and gets wrong only the thing the last two checks in this file ask for:
+# it names its fixed_path on every successful run, having never worked out
+# whether anything of the operator's was ever there. A banner, a line saying
+# what it wrote, a progress message -- and it is the shape somebody writes by
+# accident, by reading what the floor asks for rather than what the note is
+# for.
+#
+# So every check before those two comes out green, which is the point of
+# having it. The repo it hands back is the repo it was given, on the run that
+# finishes and on the run that is stopped. It names the operator's uncommitted
+# work it wrote over, because restore_repo_state does that part for it. And it
+# passes 73's own pass by saying the word for a reason that has nothing to do
+# with having looked -- which is the whole of what that pass cannot see, and
+# is why this driver exists the way arms-late does.
+#
+# It calls everything the conformant one calls except
+# report_kept_paths_replaced, which is the function that decides *whether*
+# there is anything to say. That is deliberate rather than an oversight in the
+# fixture: a driver calling it and printing the banner as well would fail the
+# silences for the banner alone, and what is being caught here is a banner
+# standing in for the note rather than one sitting beside it.
+mkdir -p "$SCRATCH/always-says"
+cat > "$SCRATCH/always-says/driver.yaml" <<'YAML'
+name: always-says
+description: A fixed-location driver that names its fixed_path on every run, having never looked.
+output_mode: fixed-location
+fixed_path: ALWAYS.md
+command: run.sh
+YAML
+cat > "$SCRATCH/always-says/run.sh" <<'DRIVER'
+#!/usr/bin/env bash
+set -euo pipefail
+[ $# -eq 1 ] || { echo "usage: run.sh <repo-path>" >&2; exit 1; }
+REPO_PATH="$1"
+FIXED="ALWAYS.md"
+
+command -v conformance-session >/dev/null 2>&1 || {
+  echo "conformance-session CLI not found on PATH" >&2; exit 1; }
+[ "${BASH_VERSINFO[0]}" -ge 4 ] || {
+  echo "this driver needs bash 4+ (running ${BASH_VERSION})" >&2; exit 1; }
+
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/repo-snapshot.sh"
+
+SNAPSHOT="$(mktemp)"
+snapshot_repo_state "$REPO_PATH" > "$SNAPSHOT"
+
+RESTORE_ON_EXIT=1
+cleanup() {
+  local status=$?
+  if [ "$RESTORE_ON_EXIT" -eq 1 ]; then
+    restore_repo_state "$REPO_PATH" "$SNAPSHOT" \
+      || echo "could not roll $REPO_PATH back to how it was found" >&2
+  fi
+  rm -f "$SNAPSHOT"
+  exit "$status"
+}
+trap cleanup EXIT
+
+exit_on_interrupt "$REPO_PATH"
+
+( cd "$REPO_PATH" && conformance-session ) >&2 || {
+  echo "the session failed" >&2; exit 1; }
+[ -f "$REPO_PATH/$FIXED" ] || { echo "the session did not write $FIXED" >&2; exit 1; }
+
+restore_repo_state "$REPO_PATH" "$SNAPSHOT" "$FIXED"
+
+# The one thing wrong with this driver, and the whole of it: a line that says
+# the path on every run that gets here, whatever the repo held at it before.
+echo "wrote $REPO_PATH/$FIXED" >&2
+RESTORE_ON_EXIT=0
+DRIVER
+
 # Does not keep the contract, and does not have to try: it declares the
 # mode, runs its session, and walks away. This is precisely the driver 38
 # left reachable -- valid manifest, successful harvest, zero exit, dirty
@@ -1045,7 +1297,7 @@ DRIVER
 
 chmod +x "$SCRATCH"/*/run.sh
 
-assert_eq "$(fixed_location_drivers "$SCRATCH" | tr '\n' ' ')" "arms-late conformant git-guarded leaky partly-declared undeclared " \
+assert_eq "$(fixed_location_drivers "$SCRATCH" | tr '\n' ' ')" "always-says arms-late conformant git-guarded leaky partly-declared undeclared " \
   "the drivers declaring fixed-location are the ones picked up -- not the one declaring another mode, and not the lib/ beside them"
 
 # Nothing below reads $REPO or $SESSION_LOG without this having succeeded:
@@ -1074,10 +1326,16 @@ assert_kept_the_repo_as_it_found_it "arms-late" "LATE.md"
 assert_file_exists "$WORK/harvested.md" \
   "a driver that sets its rollback up too late passes everything above, which is why the run that is stopped below has to exist"
 
-echo ""
-echo "the same three drivers, against a run stopped while the session is writing:"
+run_with_misbehaving_session "$SCRATCH" "always-says" \
+  || fail "always-says: names the CLI it runs, so a session can be stood up for it"
+assert_kept_the_repo_as_it_found_it "always-says" "ALWAYS.md"
+assert_file_exists "$WORK/harvested.md" \
+  "a driver that names its fixed_path on every run is indistinguishable from the conformant one here, which is why the two runs at the bottom of this file have to exist"
 
-# The floor's other half, asked of the same three drivers so that the two
+echo ""
+echo "the same four drivers, against a run stopped while the session is writing:"
+
+# The floor's other half, asked of the same four drivers so that the two
 # questions are answered about one set rather than about two.
 if stopped_run_or_fail "$SCRATCH" "conformant"; then
   assert_kept_the_repo_when_stopped "conformant" "THIRD.md"
@@ -1092,10 +1350,16 @@ if stopped_run_or_fail "$SCRATCH" "arms-late"; then
     "a driver that sets its rollback up only after its session has had the run of the repo"
 fi
 
+# Expected to keep it, the same as the conformant one: what always-says gets
+# wrong is a line on its success path, and a stopped run never reaches one.
+if stopped_run_or_fail "$SCRATCH" "always-says"; then
+  assert_kept_the_repo_when_stopped "always-says" "ALWAYS.md"
+fi
+
 echo ""
 echo "the same drivers, against a session that writes over work the repo already had:"
 
-# The floor's third question, asked of the two drivers whose answers to it
+# The floor's third question, asked of the drivers whose answers to it
 # differ: one names what it could not put back, and one has nothing to say
 # because it puts nothing back at all. arms-late is left out on purpose --
 # what it gets wrong is when it arms, which is the stopped run's question,
@@ -1103,6 +1367,14 @@ echo "the same drivers, against a session that writes over work the repo already
 run_over_prior_work "$SCRATCH" "conformant" \
   || fail "conformant: names the CLI it runs, so a session can be stood up for it"
 assert_named_the_work_it_wrote_over "conformant"
+
+# And of always-says, which answers it exactly as the conformant one does and
+# off the same line of the library. Asked rather than assumed: the claim this
+# file makes about that driver is that everything except the note comes out
+# green, and a claim about a driver's passes is worth no more than the passes.
+run_over_prior_work "$SCRATCH" "always-says" \
+  || fail "always-says: names the CLI it runs, so a session can be stood up for it"
+assert_named_the_work_it_wrote_over "always-says"
 
 # Caught on this question as well, and it is the one a driver can fail while
 # passing the first two: nothing here rolls anything back, so nothing here
@@ -1117,11 +1389,18 @@ else
 fi
 
 echo ""
-echo "the same two drivers, against a repo whose uncommitted work was at the path they were run for:"
+echo "the same three drivers, against a repo whose uncommitted work was at the path they were run for:"
 
 run_over_work_at_the_fixed_path "$SCRATCH" "conformant" \
   || fail "conformant: names the CLI it runs, so a session can be stood up for it"
 assert_named_the_file_it_was_run_for "conformant" "THIRD.md"
+
+# And passed by the driver that never looked, which is the whole of why the
+# runs below this exist. Nothing about this pass is wrong -- the note really
+# does have to be printed here -- and nothing about it can tell why it was.
+run_over_work_at_the_fixed_path "$SCRATCH" "always-says" \
+  || fail "always-says: names the CLI it runs, so a session can be stood up for it"
+assert_named_the_file_it_was_run_for "always-says" "ALWAYS.md"
 
 # And caught here too, on the one question whose answer leaves no trace in
 # the repo either way: this run replaced a map the operator was half way
@@ -1136,6 +1415,41 @@ else
   fail "a fixed-location driver that replaces an operator's own copy of the file it was run for and says nothing is caught (it named the file, so this check cannot tell)"
   cat "$WORK/run.log" >&2
 fi
+
+echo ""
+echo "the same two drivers, against a repo holding nothing of the operator's at that path:"
+
+# The note's other half, asked twice of the driver written the documented way:
+# once of a repo that never had a file at its fixed_path, which is every repo
+# nobody has run one of these against before, and once of a repo the operator
+# had deleted a committed one from. Both are runs the library decides to keep
+# quiet on, and the conformant driver is quiet because it asked it.
+run_with_nothing_at_the_fixed_path "$SCRATCH" "conformant" \
+  || fail "conformant: names the CLI it runs, so a session can be stood up for it"
+assert_said_nothing_about_the_file_it_was_run_for "conformant" "THIRD.md" \
+  "never had a file at THIRD.md" ""
+
+run_over_a_deleted_fixed_path "$SCRATCH" "conformant" \
+  || fail "conformant: names the CLI it runs, so a session can be stood up for it"
+assert_said_nothing_about_the_file_it_was_run_for "conformant" "THIRD.md" \
+  "held the operator's own uncommitted deletion of THIRD.md" " D THIRD.md"
+
+# And the driver written to fail exactly this, caught on both of them, having
+# come through every check above green -- 73's own pass included, which is the
+# one it passes for a reason that has nothing to do with having looked.
+#
+# leaky is not asked either of these, and could not be: saying nothing is what
+# this question wants, and that driver says nothing about anything. What tells
+# the two apart is which of them ever says it, which is why the driver written
+# for these had to be a new one rather than the one already here.
+run_with_nothing_at_the_fixed_path "$SCRATCH" "always-says" \
+  || fail "always-says: names the CLI it runs, so a session can be stood up for it"
+assert_caught_saying_it_anyway "always-says" "ALWAYS.md" "never had a file at ALWAYS.md"
+
+run_over_a_deleted_fixed_path "$SCRATCH" "always-says" \
+  || fail "always-says: names the CLI it runs, so a session can be stood up for it"
+assert_caught_saying_it_anyway "always-says" "ALWAYS.md" \
+  "held the operator's own uncommitted deletion of ALWAYS.md"
 
 echo ""
 echo "drivers whose session cannot be stood in for:"
