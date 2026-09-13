@@ -307,7 +307,7 @@ assert_not_contains "$changed7" "src/other.js" \
 assert_not_contains "$changed7" "CONTEXT.md" \
   "the kept path is not named among what the run wrote over, even though the operator had uncommitted work in it: writing that one is what the run was for, and a driver failing over it would fail against every repo that already had one in flight -- it is reported separately, by the section below"
 assert_not_contains "$changed7" "node_modules" \
-  "a path git is ignoring is not named: fingerprinting those would mean reading the whole of node_modules on every run, which is the cost this deliberately does not pay"
+  "a path inside a directory git is ignoring whole is not named: the listing collapses node_modules to one entry and never descends into it, which is the cost this deliberately does not pay -- the ignored files git *does* list one by one have their own section below"
 
 # What restore then does about them, on the same repo and the same snapshot.
 # It cannot put any of them back, so the only thing left that is worth doing
@@ -331,7 +331,7 @@ assert_eq "$(cat "$REPO7/src/other.js" 2>/dev/null)" \
   "$(printf "console.log('bye')\n// also mine")" \
   "an uncommitted edit the run left alone is still exactly as the operator left it"
 assert_file_exists "$REPO7/node_modules/pkg/index.js" \
-  "and an ignored path is still there -- unreported, but not deleted either"
+  "and a path inside a wholly-ignored directory is still there -- unreported, but not deleted either"
 
 # And the one path both of those readings pass over, asked for on its own.
 #
@@ -372,6 +372,262 @@ assert_eq "$(restore_repo_state "$REPO9" "$SNAP9" CONTEXT.md 2>&1 >/dev/null)" "
   "and restore says nothing either -- the report has to be silent when there is nothing to report, or it is noise"
 assert_eq "$(report_kept_paths_replaced "$REPO9" "$SNAP9" CONTEXT.md 2>&1 >/dev/null)" "" \
   "and nothing is said about the kept path: this repo had no CONTEXT.md of its own for the run to replace, and a note on every successful run is a note nobody reads"
+
+echo ""
+echo "repo snapshot/restore, work the operator keeps out of git:"
+
+# The other half of the same hole, and the half that holds the work worth
+# most. `git ls-files --others --exclude-standard` -- the set the section
+# above fingerprints -- stops at git's ignore rules, and "ignored" covers two
+# populations that have nothing in common. node_modules is regenerable and
+# nobody would miss it; a .env, a local settings file, a scratch directory
+# somebody keeps out of git precisely because it is theirs, are ignored for
+# the opposite reason. Both shipped drivers hand a headless agent write
+# access to the repo, so the second population is exactly what a session
+# being helpful about configuration writes into.
+#
+# What separates the two is something git already computes: asked for the
+# ignored paths in its normal untracked mode, git collapses a wholly-ignored
+# directory to one `node_modules/` entry and never descends into it, while
+# listing an ignored *file* by name. So the expensive set and the interesting
+# one arrive already told apart -- and which untracked mode it is asked in
+# turns out to be the whole of that, which the section below is about.
+REPO20="$WORK/repo20"
+mkdir -p "$REPO20/src" "$REPO20/.claude"
+echo "# readme" > "$REPO20/README.md"
+echo "console.log('hi')" > "$REPO20/src/index.js"
+echo "{}" > "$REPO20/.claude/settings.json"
+printf 'node_modules/\n.env\nsettings.local.json\n*.tmp\n' > "$REPO20/.gitignore"
+make_repo_at "$REPO20"
+
+# What the operator had out of git when the run started: a .env holding real
+# credentials, a local settings file beside a tracked one, an ignored file the
+# run will leave alone, and a wholly-ignored directory nobody would miss.
+echo "API_KEY=the-real-one" > "$REPO20/.env"
+echo '{"mine":true}' > "$REPO20/.claude/settings.local.json"
+echo "scratch" > "$REPO20/notes.tmp"
+echo "notes to self" > "$REPO20/scratch-note.md"
+mkdir -p "$REPO20/node_modules/pkg"
+echo "module.exports = 1" > "$REPO20/node_modules/pkg/index.js"
+
+SNAP20="$WORK/snapshot20"
+snapshot_repo_state "$REPO20" > "$SNAP20"
+
+# The session, having been asked for one file and having decided to be
+# helpful about configuration on the way.
+echo "the map" > "$REPO20/CONTEXT.md"
+echo "API_KEY=placeholder" > "$REPO20/.env"
+echo '{"helpfully":"rewritten"}' > "$REPO20/.claude/settings.local.json"
+echo "helpfully rewritten" > "$REPO20/scratch-note.md"
+echo "module.exports = 2" > "$REPO20/node_modules/pkg/index.js"
+
+restore20="$(restore_repo_state "$REPO20" "$SNAP20" CONTEXT.md 2>&1 >/dev/null)"
+
+assert_contains "$restore20" "
+  .env
+" \
+  "an ignored file the operator had real work in, which the run wrote over, is named -- this is the file the reporting existed least usefully without"
+assert_contains "$restore20" "
+  .claude/settings.local.json
+" \
+  "and so is a local settings file sitting beside a tracked one, which is how git comes to list it individually rather than collapsing the directory"
+assert_contains "$restore20" "
+  scratch-note.md
+" \
+  "alongside the paths git was not ignoring at all, in one list: to the operator it is one loss either way"
+assert_not_contains "$restore20" "notes.tmp" \
+  "an ignored file the run left alone is not named: being ignored is not the same as being written to"
+assert_not_contains "$restore20" "node_modules/pkg" \
+  "and nothing inside a wholly-ignored directory is, because the listing collapses it to one entry and never descends -- that is what keeps this affordable"
+assert_contains "$restore20" "node_modules/" \
+  "the report says so in as many words, so an operator reads the list knowing which half of their repo it covers"
+assert_eq "$(cat "$REPO20/.env")" "API_KEY=placeholder" \
+  "reporting is the whole of it: the file is left as the run left it, because nothing here holds a copy of what it said"
+assert_file_exists "$REPO20/node_modules/pkg/index.js" \
+  "and the ignored path nobody is told about is still there -- unreported, but not deleted either"
+
+# And the half that must not move. pocock fails a run that wrote anything
+# beyond its map, and it works that list out from this same diff. Widening
+# what gets *reported* to the ignored files must not widen what a driver
+# *fails* on, or a session touching a log file has made the driver worse.
+extras20="$(paths_changed_since_snapshot "$REPO20" "$SNAP20" CONTEXT.md)"
+
+assert_contains "$extras20" "scratch-note.md" \
+  "the list a driver fails on still names what it named before"
+assert_not_contains "$extras20" ".env" \
+  "and does not name the ignored file the run wrote over: that loss is reported, not failed on, so a driver does not start rejecting runs over a file git was already ignoring"
+assert_not_contains "$extras20" "settings.local.json" \
+  "nor the local settings file, for the same reason"
+
+# The one ignored path that was already failing runs, and still is: a file the
+# run *created*. That has never needed a fingerprint -- it is simply not in
+# the snapshot -- and nothing here changes what a driver does about it.
+REPO21="$WORK/repo21"
+mkdir -p "$REPO21"
+echo "# readme" > "$REPO21/README.md"
+printf '*.log\n' > "$REPO21/.gitignore"
+make_repo_at "$REPO21"
+SNAP21="$WORK/snapshot21"
+snapshot_repo_state "$REPO21" > "$SNAP21"
+echo "the map" > "$REPO21/CONTEXT.md"
+echo "chatter" > "$REPO21/session.log"
+
+assert_contains "$(paths_changed_since_snapshot "$REPO21" "$SNAP21" CONTEXT.md)" "session.log" \
+  "an ignored file the run created is named where it always was: it is new, so there is nothing of the operator's in it, and the failure condition it feeds is unchanged"
+
+# The one entry in that listing that is not "<status> <path>": a rename or
+# copy is followed by a second record holding the path it came from, with no
+# status in front of it. Nothing ignored is ever a rename, so this only bites
+# through a filename -- but a repo is allowed to hold a file called `!! x`,
+# and read as a status that bare record is an ignored path that was never
+# ignored and is not even there.
+REPO23="$WORK/repo23"
+mkdir -p "$REPO23"
+echo "# readme" > "$REPO23/README.md"
+printf '.env\n' > "$REPO23/.gitignore"
+echo "decoy" > "$REPO23/!! decoy.md"
+make_repo_at "$REPO23"
+git -C "$REPO23" mv "!! decoy.md" moved.md
+echo "API_KEY=the-real-one" > "$REPO23/.env"
+
+SNAP23="$WORK/snapshot23"
+snapshot_repo_state "$REPO23" > "$SNAP23"
+
+echo "API_KEY=placeholder" > "$REPO23/.env"
+echo "decoy, put back by the run" > "$REPO23/!! decoy.md"
+echo "the map" > "$REPO23/CONTEXT.md"
+
+restore23="$(restore_repo_state "$REPO23" "$SNAP23" CONTEXT.md 2>&1 >/dev/null)"
+
+assert_eq "$(ignored_file_paths "$REPO23" | tr '\0' '\n')" ".env" \
+  "the ignored file is the whole of what the listing yields: the rename's other half is a bare path that reads exactly like an ignored entry for decoy.md, and stepping over it is the difference between that and a path this repo has never had"
+assert_contains "$restore23" "
+  .env
+" \
+  "and the run's write to the real one is still reported"
+assert_not_contains "$restore23" "decoy" \
+  "while the path that was never ignored and was never there is claimed nowhere"
+
+# And the setting that would otherwise decide all of this from outside the
+# repo. The collapse the G records are affordable because of is the untracked
+# mode's doing, not `--ignored`'s, and the untracked mode has a config knob:
+# `status.showUntrackedFiles = all` lists every file under node_modules
+# individually, and `no` lists nothing ignored at all. Either one and the
+# reporting is settled by an operator's .gitconfig rather than by this file.
+REPO24="$WORK/repo24"
+mkdir -p "$REPO24/node_modules/pkg"
+echo "# readme" > "$REPO24/README.md"
+printf 'node_modules/\n.env\n' > "$REPO24/.gitignore"
+make_repo_at "$REPO24"
+echo "API_KEY=the-real-one" > "$REPO24/.env"
+echo "module.exports = 1" > "$REPO24/node_modules/pkg/index.js"
+
+git -C "$REPO24" config status.showUntrackedFiles all
+assert_eq "$(ignored_file_paths "$REPO24" | tr '\0' '\n')" ".env" \
+  "a repo configured to show every untracked file still gets one entry for node_modules and one path fingerprinted: the collapse is asked for outright rather than inherited from a setting"
+
+git -C "$REPO24" config status.showUntrackedFiles no
+assert_eq "$(ignored_file_paths "$REPO24" | tr '\0' '\n')" ".env" \
+  "and one configured to show none of them still finds the .env, rather than reporting a repo with nothing ignored worth watching"
+
+git -C "$REPO24" config --unset status.showUntrackedFiles
+
+# The kept path, when the kept path is one of these. A repo is allowed to
+# gitignore the very file the driver is run to produce -- somebody who does
+# not want a generated CONTEXT.md in their history -- and before the ignored
+# files were fingerprinted at all, that operator's uncommitted version of it
+# was replaced and harvested away with nothing said anywhere. The exemption
+# stays what it was: not a loss, because writing that file is the run's job;
+# and now a note, because one answer to "was this written over" serves both
+# readings rather than two that could disagree.
+REPO25="$WORK/repo25"
+mkdir -p "$REPO25"
+echo "# readme" > "$REPO25/README.md"
+printf 'CONTEXT.md\n' > "$REPO25/.gitignore"
+make_repo_at "$REPO25"
+echo "an old map of mine" > "$REPO25/CONTEXT.md"
+
+SNAP25="$WORK/snapshot25"
+snapshot_repo_state "$REPO25" > "$SNAP25"
+echo "the map this run wrote" > "$REPO25/CONTEXT.md"
+
+assert_eq "$(paths_changed_since_snapshot "$REPO25" "$SNAP25" CONTEXT.md)" "" \
+  "an ignored kept path is exempt from the losses exactly as a non-ignored one is: writing that file is what the run was for, so a driver does not fail over it"
+assert_eq "$(restore_repo_state "$REPO25" "$SNAP25" CONTEXT.md 2>&1 >/dev/null)" "" \
+  "and the rollback says nothing about it either, for the same reason"
+assert_contains "$(report_kept_paths_replaced "$REPO25" "$SNAP25" CONTEXT.md 2>&1 >/dev/null)" "CONTEXT.md" \
+  "but the success path says so, which is the whole of what the exemption is exempt from -- archimedes moves that file out of the repo afterwards, and being gitignored was never a reason to be told about it last"
+
+echo ""
+echo "repo snapshot, a repo whose ignore rules list thousands of files one by one:"
+
+# The assumption the cheapness rests on is tidy ignore rules, and it is an
+# assumption rather than a guarantee. A `*.log` pattern matching files that
+# sit among tracked ones has git list every one of them individually -- the
+# shape that breaks the collapse above. Measured rather than reasoned about:
+# on 20,001 such files totalling 78 MB, fingerprinting the lot took 1.5s
+# against 0.08s for the first 500, so the cap is 500 and the number is stated
+# rather than guessed at.
+#
+# An honest "there were more than this" beats both an unbounded walk and a
+# silent truncation, so the report says which it was.
+REPO22="$WORK/repo22"
+mkdir -p "$REPO22/logs"
+echo "# readme" > "$REPO22/README.md"
+echo "kept" > "$REPO22/logs/keep.txt"
+printf '*.log\n' > "$REPO22/.gitignore"
+make_repo_at "$REPO22"
+
+# Zero-padded so the order git lists them in -- which is the order the cap
+# takes the first N from -- is the order the names read in.
+i=1
+while [ "$i" -le 600 ]; do
+  printf 'run %s\n' "$i" > "$(printf '%s/logs/a%04d.log' "$REPO22" "$i")"
+  i=$((i + 1))
+done
+
+SNAP22="$WORK/snapshot22"
+snapshot_repo_state "$REPO22" > "$SNAP22"
+
+echo "written over, inside the cap" > "$REPO22/logs/a0001.log"
+echo "written over, past the cap" > "$REPO22/logs/a0600.log"
+echo "the map" > "$REPO22/CONTEXT.md"
+
+restore22="$(restore_repo_state "$REPO22" "$SNAP22" CONTEXT.md 2>&1 >/dev/null)"
+
+assert_contains "$restore22" "
+  logs/a0001.log
+" \
+  "an ignored file inside the cap that the run wrote over is named"
+assert_not_contains "$restore22" "
+  logs/a0600.log
+" \
+  "one past it is not: there is no record of what it said, so there is nothing that can be claimed either way"
+assert_contains "$restore22" "only the first 500 were fingerprinted" \
+  "and the cap is stated, so the list is read as the bounded thing it is"
+assert_contains "$restore22" "lists 600 ignored files individually" \
+  "along with how many there actually were, which is the difference between an honest bound and a silent truncation"
+
+# And the case the note exists for, which is the one where there is no list
+# for it to bound. A run whose only loss was an ignored file past the cap
+# reports nothing at all -- and read on its own, that silence says "nothing of
+# yours was written over" when what happened is "nothing among the part I
+# looked at". So the note is printed whether or not anything else is.
+echo "written over, past the cap, and nothing else" > "$REPO22/logs/a0599.log"
+SNAP22B="$WORK/snapshot22b"
+snapshot_repo_state "$REPO22" > "$SNAP22B"
+echo "written over again, past the cap" > "$REPO22/logs/a0600.log"
+
+restore22b="$(restore_repo_state "$REPO22" "$SNAP22B" CONTEXT.md 2>&1 >/dev/null)"
+
+assert_not_contains "$restore22b" "back as it was found, apart from" \
+  "a run whose only write was past the cap has no losses to list, because there is no record of what that file said"
+assert_contains "$restore22b" "only the first 500 were fingerprinted" \
+  "but the bound is still said, so the silence is read as the bounded thing it is rather than as a repo that came through clean"
+
+# The other half of that, or the note would be a line on every run everywhere.
+assert_not_contains "$restore20" "were fingerprinted" \
+  "a repo whose ignore rules stay under the cap is told nothing about it: there is no bound to say, so saying one would be the noise this is otherwise silent to avoid"
 
 echo ""
 echo "repo snapshot, a kept path the run rewrote without changing it:"
@@ -795,6 +1051,22 @@ assert_not_contains "$out" "back as it was found" \
   "and does not say the repo is back as it was found"
 assert_eq "$(cat "$REPO19/src/index.js")" "clobbered by the run" \
   "and the tracked file the run wrote over is still as the run left it, which is what the refusal is about"
+
+# And the read the snapshot half added, which fails in the direction that
+# reads best of all: no ignored listing means no G records, and no G records
+# is byte-for-byte a repo whose ignore rules hold nothing but node_modules --
+# so a run that wrote over the operator's .env would be reported nowhere, on
+# the strength of a question nobody managed to ask. Taken under a driver's
+# shell options, as a statement of its own, because that is where the status
+# has to land.
+GIT_STAND_IN_FLAG="--ignored=traditional"
+( set -euo pipefail; snapshot_repo_state "$REPO19" > "$WORK/snapshot19-ignored" )
+snap19_ignored=$?
+if [ "$snap19_ignored" -eq 0 ]; then
+  fail "snapshotting fails when the ignored listing cannot be made, rather than recording a repo with nothing ignored worth watching"
+else
+  pass "snapshotting fails when the ignored listing cannot be made, rather than recording a repo with nothing ignored worth watching"
+fi
 
 unset -f git
 GIT_STAND_IN_FLAG=""

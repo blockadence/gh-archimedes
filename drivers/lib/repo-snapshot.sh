@@ -86,11 +86,14 @@
 # old contents, which is the expensive thing deliberately not kept.
 #
 # What it no longer does is happen quietly. snapshot_repo_state fingerprints
-# the paths the operator has work in flight in (the B records),
-# changed_since_snapshot reports the ones whose contents the run moved (the O
-# records), and restore_repo_state names them on its way out. Reporting is the
-# whole of it -- these are named, never restored -- and the line the
-# fingerprinting stops at is drawn, with its reasons, at changed_since_snapshot.
+# the paths the operator has work in flight in (the B records) and the ignored
+# files git lists one by one (the G records), changed_since_snapshot reports
+# the ones whose contents the run moved (the O and I records), and
+# restore_repo_state names them on its way out. Reporting is the whole of it --
+# these are named, never restored -- and the line the fingerprinting stops at
+# is drawn, with its reasons, at changed_since_snapshot. Which of the two kinds
+# a loss is reported as is not about how bad it was; it is about what a driver
+# is entitled to *fail* over, which is the same line and not one step further.
 #
 # One path is left out of all that on purpose: the driver's own fixed_path,
 # which the run exists to write and which reporting as a loss would fail every
@@ -117,19 +120,39 @@
 #   B  a path the operator already had uncommitted work in, recorded as
 #      "<fingerprint><TAB><path>" -- by content, so that a run writing over
 #      one can be told apart from the state that predated it
+#   G  the same record, for a path git is ignoring and lists individually:
+#      a .env, a local settings file. Kept apart from B because reporting
+#      one of these must not widen what a driver *fails* on -- see
+#      changed_since_snapshot, which is where the two part company
+#   T  how many such paths there were, printed only when there were more
+#      than the cap and the rest went unfingerprinted. A bound on the
+#      reporting, said out loud rather than applied in silence
 #
 # U and B overlap on purpose, and the difference between them is the whole of
 # what each is for. U has to name every untracked path, ignored ones included,
 # because it is what stops the cleanup deleting node_modules. B has to name
 # none of them, because it reads their contents, and reading the contents of
 # every untracked path means reading the whole of node_modules on every run --
-# the cost that kept this unrecorded for as long as it was. What is left once
-# git's own ignore rules have been applied is the work the operator actually
+# the cost that kept this unrecorded for as long as it was.
+#
+# G is the part of that cost git hands over for free, and the reason "ignored"
+# could not be left as the place the fingerprinting stops. node_modules is
+# ignored because it is regenerable and nobody would miss it; a .env, a
+# .claude/settings.local.json, a local config.toml are ignored for the
+# opposite reason -- not because they do not matter, but because they are not
+# the repo's to carry. They hold exactly the work this exists to notice the
+# loss of, and both shipped drivers hand a headless agent write access to the
+# repo with --permission-mode bypassPermissions, so a session deciding to be
+# helpful about configuration is writing into precisely the file B cannot see.
+# What separates the two populations is something git already computes: see
+# ignored_file_paths.
+#
+# What is left once B and G are put together is the work the operator actually
 # has in flight, which is small enough to fingerprint and is the only part
-# worth being told about: an untracked note, an edited source file. What that
-# costs is bounded by how much the operator has going at once rather than by
-# how big the checkout is -- which is the whole reason the line is drawn
-# here, and is worth re-measuring rather than trusting if it ever moves.
+# worth being told about: an untracked note, an edited source file, a .env.
+# What that costs is bounded by how much the operator has going at once rather
+# than by how big the checkout is -- which is the whole reason the line is
+# drawn here, and is worth re-measuring rather than trusting if it ever moves.
 snapshot_repo_state() { # <repo-path>
   local repo="$1" head
   head="$(git -C "$repo" rev-parse --verify -q HEAD || true)"
@@ -152,6 +175,147 @@ snapshot_repo_state() { # <repo-path>
     | while IFS= read -r -d '' record; do
         printf 'B\t%s\0' "$record"
       done
+
+  fingerprint_ignored_files "$repo"
+}
+
+# How many individually-listed ignored files a snapshot will fingerprint.
+#
+# A stated number rather than an unbounded walk, because the cheapness of the
+# G records rests on an assumption about tidy ignore rules and not on a
+# guarantee: a `*.log` pattern matching files that sit among tracked ones has
+# git list every one of them by name, which is the shape that breaks the
+# collapse ignored_file_paths relies on.
+#
+# Measured on that shape rather than reasoned about. 20,001 individually
+# listed ignored files totalling 78 MB: the listing itself is 0.05s either
+# way, fingerprinting the lot is 1.5s, and fingerprinting the first 500 is
+# 0.08s. So the cap is 500, and what it buys is that the worst repo anybody
+# has shown this costs about what the tidy one does.
+#
+# The order it takes the first 500 from is git's, which sorts by path -- so
+# the same repo caps at the same place on every run rather than at whatever
+# the filesystem handed back.
+#
+# Of the two ways to be wrong about the rest, an honest "there were more than
+# this" beats a silent truncation, which is what the T record is for.
+REPO_SNAPSHOT_IGNORED_LIMIT=500
+
+# Print a snapshot's G records for <repo-path> -- one
+# "G<TAB><fingerprint><TAB><path>" for each ignored file git lists
+# individually, up to REPO_SNAPSHOT_IGNORED_LIMIT of them -- preceded by the T
+# record when there were more than that.
+#
+# Its own function rather than a dozen more lines inside snapshot_repo_state,
+# because it is the one read there with a decision in it, and the one that has
+# to spool: the cap needs the whole list counted before any of it is hashed.
+#
+# Which is where the snapshot half gained a temp file it did not want. Every
+# other read in snapshot_repo_state streams, and a machine with none used to
+# get as far as a snapshot; now it fails at one. That is the right way round
+# -- the alternative is reading this producer through a process substitution,
+# and a listing that failed in there is a repo with nothing ignored worth
+# watching, which is the reassuring answer this file refuses to let anything
+# fail into. It fails loudly instead, before a session has started.
+#
+# And the cap bounds the hashing rather than the walk, which is the part that
+# reads file contents and so the part that scales with the repo rather than
+# with the ignore rules. The listing is still one loop iteration per ignored
+# file git names -- about 0.4s for 20,001 of them, against 1.5s to hash them
+# -- and it cannot be cut short, because the count that makes the truncation
+# honest is a count of all of them.
+fingerprint_ignored_files() { # <repo-path>
+  local repo="$1" listing p
+  local -a ignored=()
+
+  # Spooled rather than read through `< <(...)`, which is this file's one rule
+  # about reading a producer, and it bites here the way it bites everywhere
+  # else: a git that fell over inside a process substitution hands back no
+  # paths and no status, and no paths is byte-for-byte "this repo is ignoring
+  # nothing worth watching" -- the answer that makes the whole of the G
+  # reporting silently not happen.
+  listing="$(mktemp)" || return 1
+  ignored_file_paths "$repo" > "$listing" || { rm -f "$listing"; return 1; }
+  while IFS= read -r -d '' p; do
+    ignored+=("$p")
+  done < "$listing"
+  rm -f "$listing"
+
+  if [ "${#ignored[@]}" -gt "$REPO_SNAPSHOT_IGNORED_LIMIT" ]; then
+    printf 'T\t%s\0' "${#ignored[@]}"
+    ignored=("${ignored[@]:0:$REPO_SNAPSHOT_IGNORED_LIMIT}")
+  fi
+  [ "${#ignored[@]}" -gt 0 ] || return 0
+
+  local record
+  printf '%s\0' "${ignored[@]}" \
+    | fingerprint_paths "$repo" \
+    | while IFS= read -r -d '' record; do
+        printf 'G\t%s\0' "$record"
+      done
+}
+
+# Print, NUL-terminated, the paths in <repo-path> git is ignoring and lists
+# individually: the ignored *files*, not the contents of a directory every
+# entry of which is ignored.
+#
+# This listing is the whole of why the G records are affordable, and both of
+# its flags are load-bearing. Asked this way, git collapses a wholly-ignored
+# directory to a single `node_modules/` line and does not descend into it,
+# while an ignored file sitting among tracked ones is listed by name -- so the
+# expensive population and the interesting one arrive already told apart, by
+# something git computes anyway. Measured rather than assumed: a 113 MB,
+# 28,971-file node_modules beside one .env comes back as two lines in 0.03s,
+# and exactly one path is then hashed.
+#
+# `git status` rather than `git ls-files --others --ignored --exclude-standard
+# --directory --no-empty-directory`, which is what it takes to get the same
+# collapse out of ls-files. Two flags that mean what they say beat four that
+# add up to it.
+#
+# And `--untracked-files=normal` is spelled out rather than left to the
+# default, because it is the flag without which the whole thing is a lie in
+# somebody's repo. The collapse is not a property of `--ignored` at all; it is
+# the untracked mode doing it, and that mode is a *config setting*. An
+# operator with `status.showUntrackedFiles = all` gets every one of
+# node_modules' 28,971 files listed individually -- the cost this exists to
+# avoid, arriving through their .gitconfig rather than through their ignore
+# rules. One with it set to `no` gets an empty listing, which is the worse
+# half: no G records, no reporting, and nothing anywhere saying why.
+#
+# No ignored entry is ever a rename, but a rename anywhere else in the repo
+# carries a second record that is a bare path -- see the body -- and a file
+# literally named `!! something` would otherwise arrive here as one.
+#
+# Returns non-zero, having printed whatever it got to, if the listing could
+# not be made. An empty answer is "this repo is ignoring nothing it lists
+# individually", which is a real and perfectly ordinary answer, so it has to
+# be told apart from a git that fell over -- and it is told apart the way
+# list_repo_dirs does it, out of PIPESTATUS rather than through a process
+# substitution that would throw the status away.
+ignored_file_paths() { # <repo-path>
+  git -C "$1" status --porcelain --untracked-files=normal --ignored=traditional -z \
+    | {
+        local record skip=0
+        while IFS= read -r -d '' record; do
+          if [ "$skip" -eq 1 ]; then skip=0; continue; fi
+          case "$record" in
+            '!! '*)
+              record="${record:3}"
+              # A collapsed directory rather than a file. There is nothing at
+              # that path to fingerprint, and going in to find something is
+              # the cost this exists not to pay.
+              case "$record" in */) continue ;; esac
+              printf '%s\0' "$record" ;;
+            # A rename or a copy, which is the one entry `-z` follows with a
+            # second record: the path it came from, with no status in front
+            # of it. Stepped over rather than read as a path of its own.
+            [RC]?" "* | ?[RC]" "*)
+              skip=1 ;;
+          esac
+        done
+      }
+  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
 }
 
 # Print, NUL-terminated, the paths in <repo-path> holding work the operator
@@ -161,7 +325,12 @@ snapshot_repo_state() { # <repo-path>
 #
 # `--exclude-standard` is the whole of the difference between this and the U
 # records, and it is deliberate rather than an oversight to fix later. See
-# snapshot_repo_state for what each list is for.
+# snapshot_repo_state for what each list is for. What it excludes is not
+# thereby unwatched: ignored_file_paths picks up the half of it worth
+# fingerprinting, which is why that half can be left out here without leaving
+# it out altogether. Kept as two reads rather than one, because a path that
+# arrives through this one and a path that arrives through that one are
+# reported differently in the end.
 #
 # <head> is passed in already resolved, empty for a repo with no commits yet,
 # rather than asked for again here: the only caller has just worked it out, and
@@ -334,6 +503,9 @@ fingerprint_paths() { # <repo-path>
 #      deleted, or staged
 #   O  a path the operator already had uncommitted work in, whose contents
 #      the run then overwrote or removed. Nothing can put these back
+#   I  the same loss, at a path git was already ignoring and listing
+#      individually -- a .env, a local settings file. Its own kind, so that
+#      a driver can report it without failing on it; see below
 #   S  a path that predated the run untracked, which the run then staged.
 #      The file is the operator's and stays; only the index entry is undone
 #
@@ -354,11 +526,24 @@ fingerprint_paths() { # <repo-path>
 # path back would need the old contents, which is the expensive thing
 # deliberately not kept, so O says what happened and stops.
 #
-# The line the fingerprinting stops at is git's own ignore rules. A path under
-# node_modules -- or anything else `git ls-files --others` lists because it
-# lists ignored ones deliberately -- has no B record, and a run's write to one
-# is still invisible here. That is the cost judged not worth paying, and it is
-# said here so a driver can repeat it rather than discover it.
+# The line the fingerprinting stops at is the inside of a wholly-ignored
+# directory. A path under node_modules has neither a B record nor a G one --
+# the listing collapses that directory to a single entry and never descends
+# into it -- so a run's write to one is invisible here, and so is a write to
+# an ignored file past the cap the T record names. Those are the costs judged
+# not worth paying, and they are said here so a driver can repeat them rather
+# than discover them.
+#
+# Why I is a kind of its own, and the one thing about this that is a decision
+# rather than a shape. pocock fails a run that wrote anything beyond its map,
+# and it works that list out from this function. So every path added to what
+# this reports is a path a driver would start failing on -- and a driver that
+# rejects a run because an agent touched a log file has been made worse, not
+# better. The widening is on the reporting side only: restore_repo_state names
+# an I on its way out, and paths_changed_since_snapshot, which is what feeds
+# pocock's refusal, drops it. An ignored file the run *created* is untouched
+# by any of this -- it has always been an A record, because `git ls-files
+# --others` lists ignored paths deliberately, and it still fails a run.
 #
 # The comparison is by content, so it does not turn on mtime: a write that
 # lands inside the filesystem's timestamp granularity, or a tool that puts the
@@ -386,28 +571,47 @@ changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
 
   local -A before=() keep=() fingerprinted=()
   local -a fingerprinted_order=()
-  local record value
+  local record value kind
   while IFS= read -r -d '' record; do
-    # B records carry two fields where every other kind carries one, so they
-    # are read out here rather than folded into the name-keyed set below.
-    # Only the path is taken, because comparing the fingerprints belongs to
-    # the helper below and this is the list of paths to ask it about. The
-    # order they were written in is kept, so what this reports comes out in
-    # the order the snapshot listed it rather than in whatever order a hash
-    # table hands back.
-    if [ "${record%%$'\t'*}" = "B" ]; then
-      read_fingerprint_record "${record#*$'\t'}"
-      value="$FINGERPRINT_RECORD_PATH"
-      # Added to the order once however many times it was recorded: an
-      # unmerged index has `git diff --name-only HEAD` name a path once per
-      # stage, and the report is a list for a person to read.
-      if [ -z "${fingerprinted["$value"]+set}" ]; then
-        fingerprinted_order+=("$value")
-      fi
-      fingerprinted["$value"]=1
-      continue
-    fi
-    before["${record%%$'\t'*}:${record#*$'\t'}"]=1
+    kind="${record%%$'\t'*}"
+    case "$kind" in
+      # B and G records carry two fields where every other kind carries one,
+      # so they are read out here rather than folded into the name-keyed set
+      # below. Only the path is taken, because comparing the fingerprints
+      # belongs to the helper below and this is the list of paths to ask it
+      # about. The order they were written in is kept, so what this reports
+      # comes out in the order the snapshot listed it rather than in whatever
+      # order a hash table hands back.
+      B | G)
+        read_fingerprint_record "${record#*$'\t'}"
+        value="$FINGERPRINT_RECORD_PATH"
+        # Added to the order once however many times it was recorded: an
+        # unmerged index has `git diff --name-only HEAD` name a path once per
+        # stage, and the report is a list for a person to read.
+        #
+        # The kind the loss will be reported as is settled here, with the
+        # record it came from, rather than by asking git again afterwards
+        # whether the path is ignored. A run that wrote a .gitignore -- which
+        # is exactly what a scaffolder does -- would have git answer that
+        # differently by then, and a path that merely became ignored would
+        # have its loss downgraded to one a driver does not fail on.
+        if [ -z "${fingerprinted["$value"]+set}" ]; then
+          fingerprinted_order+=("$value")
+          if [ "$kind" = "G" ]; then
+            fingerprinted["$value"]="I"
+          else
+            fingerprinted["$value"]="O"
+          fi
+        fi
+        continue ;;
+      # Not a path at all -- a count, for restore_repo_state to read. Folded
+      # into the set below it would key a path-keyed table by a number, which
+      # is this file's one-shape-one-reading rule broken somewhere harmless
+      # enough that nobody would notice it had been.
+      T)
+        continue ;;
+    esac
+    before["$kind:${record#*$'\t'}"]=1
   done < "$snapshot"
   for value in "$@"; do keep["$value"]=1; done
 
@@ -488,7 +692,8 @@ changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
         || { rm -f "$overwritten"; return 1; }
       while IFS= read -r -d '' record; do
         read_fingerprint_record "$record"
-        printf 'O\t%s\0' "$FINGERPRINT_RECORD_PATH"
+        printf '%s\t%s\0' "${fingerprinted["$FINGERPRINT_RECORD_PATH"]}" \
+          "$FINGERPRINT_RECORD_PATH"
       done < "$overwritten"
       rm -f "$overwritten"
     fi
@@ -522,8 +727,8 @@ changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
 #
 # A path the snapshot did not fingerprint is not reported. There is no record
 # of what it said before, so there is nothing to compare and nothing that can
-# be claimed either way: a path the run created, and a path git was already
-# ignoring, both arrive here as silence rather than as a loss.
+# be claimed either way: a path the run created, and a path inside a
+# wholly-ignored directory, both arrive here as silence rather than as a loss.
 #
 # The comparison is of contents, so a run that rewrote a file byte for byte is
 # not reported. Nothing of the operator's went anywhere in that case, which is
@@ -535,7 +740,11 @@ overwritten_since_snapshot() { # <repo-path> <snapshot-file> [<relpath> ...]
   local -A fingerprint=()
   local record value
   while IFS= read -r -d '' record; do
-    [ "${record%%$'\t'*}" = "B" ] || continue
+    # Both kinds of fingerprint record, because the question this answers is
+    # only ever "did the contents move", which they answer identically. Which
+    # of the two a path was recorded as is what its *caller* reads
+    # differently, and that reading belongs where the caller makes it.
+    case "${record%%$'\t'*}" in B | G) ;; *) continue ;; esac
     read_fingerprint_record "${record#*$'\t'}"
     fingerprint["$FINGERPRINT_RECORD_PATH"]="$FINGERPRINT_RECORD_HASH"
   done < "$snapshot"
@@ -647,10 +856,21 @@ report_kept_paths_replaced() { # <repo-path> <snapshot-file> [<keep-relpath> ...
   } >&2
 }
 
-# The same set, one path per line, for a driver that has to say what a
-# session wrote when it was asked for one file. Kinds are dropped: an
-# operator being told their repo was written to does not need to know which
-# side of git's tracking line each path fell on.
+# The same set less its I records, one path per line, for a driver that has to
+# say what a session wrote when it was asked for one file. The other kinds are
+# dropped: an operator being told their repo was written to does not need to
+# know which side of git's tracking line each path fell on.
+#
+# The I records are dropped for a different reason, and it is the reason they
+# are a kind of their own. This is the list pocock refuses a run over -- a
+# session that wrote anything beyond its map does not get harvested -- so
+# every path here is a path a driver fails on, not merely one it mentions. A
+# write to a .env the operator was keeping out of git is worth telling them
+# about; it is not worth throwing away a billed session over, and a driver
+# that started rejecting runs because an agent touched a log file would have
+# been made worse by the widening rather than better. So the telling happens
+# where telling is all it does: restore_repo_state names those on its way out,
+# on the success and the failure path both.
 #
 # Newlines separate them, so a path with a newline in its name would be
 # reported as two. That is a report, not a plan of action -- what actually
@@ -662,6 +882,7 @@ paths_changed_since_snapshot() { # <repo-path> <snapshot-file> [<keep-relpath> .
   changed_since_snapshot "$@" > "$records" || { rm -f "$records"; return 1; }
 
   while IFS= read -r -d '' record; do
+    [ "${record%%$'\t'*}" = "I" ] && continue
     printf '%s\n' "${record#*$'\t'}"
   done < "$records"
   rm -f "$records"
@@ -717,7 +938,12 @@ restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
       A) added+=("$value") ;;
       C) changed+=("$value") ;;
       S) staged+=("$value") ;;
-      O) overwritten+=("$value") ;;
+      # One list, because to the operator reading it these are one loss: work
+      # they had not committed, written over, with no copy of it anywhere.
+      # Which side of git's ignore rules each fell on is a distinction the
+      # *drivers* need, and it is spent by the time it gets here -- see
+      # paths_changed_since_snapshot, which is where it does its work.
+      O | I) overwritten+=("$value") ;;
     esac
   done < "$records"
   rm -f "$records"
@@ -754,8 +980,14 @@ restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
   # exactly right for a directory that also holds a kept path or predates
   # the run.
   local -A dirs_before=()
+  local ignored_listed=""
   while IFS= read -r -d '' record; do
     kind="${record%%$'\t'*}"; value="${record#*$'\t'}"
+    # And, out of the same pass, how many ignored files the snapshot had to
+    # leave unfingerprinted -- the bound on the list printed at the end. Read
+    # from the snapshot rather than carried through changed_since_snapshot,
+    # whose records are paths and would have to grow a kind that is not one.
+    [ "$kind" = "T" ] && ignored_listed="$value"
     [ "$kind" = "D" ] && dirs_before["$value"]=1
   done < "$snapshot"
   #
@@ -803,8 +1035,34 @@ restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
       echo "$repo is back as it was found, apart from uncommitted work the run wrote over, which nothing here holds a copy of:"
       printf '  %s\n' "${overwritten[@]}"
       echo "those paths are as the run left them. What they said before was never committed, so it cannot be put back from here."
-      echo "this list covers the paths git was not already ignoring. A run that wrote over an ignored one -- a .env, a local settings file -- is not counted here."
+      echo "this list covers the paths git was not ignoring, and the ignored files it lists one by one -- a local .env or settings file. What it does not cover is the inside of a directory git is ignoring whole, such as node_modules/, which is never looked into."
     } >&2
+  fi
+
+  # And the cap, said whether or not there was a list to bound -- the one line
+  # here that a run which lost nothing can still print.
+  #
+  # The rule everywhere else in this file is to be silent when there is
+  # nothing to say, and this is not an exception to it so much as a case where
+  # there is something. On a repo whose ignore rules list more than the cap,
+  # the silence above does not mean "nothing of yours was written over"; it
+  # means "nothing among the part I looked at", and those are the two
+  # sentences this whole file exists to keep apart. Printed only with the
+  # list, the note would be missing in exactly the case it is for: a run whose
+  # single loss was an ignored file past the cap reports nothing at all, and
+  # an operator reading that silence reads the wrong sentence.
+  #
+  # It does mean a repo that trips the cap gets this line on every run. That
+  # is a real cost and it is the smaller one -- it is one line against a run
+  # that spawns a whole agent session, it says something true, and tidying the
+  # ignore rules is a thing the operator can actually do about it.
+  #
+  # The cap it quotes is this file's own constant while the count comes out of
+  # the snapshot, which are two eras only in principle: a snapshot is taken
+  # and read back by one driver process with one copy of this file sourced
+  # into it, so the two cannot have been different numbers.
+  if [ -n "$ignored_listed" ]; then
+    echo "$repo lists $ignored_listed ignored files individually, and only the first $REPO_SNAPSHOT_IGNORED_LIMIT were fingerprinted before this run started. Nothing here can say whether the run wrote over one of the rest." >&2
   fi
 
   if [ "$dirs_unlisted" -eq 1 ]; then

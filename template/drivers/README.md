@@ -214,14 +214,48 @@ modes are supported:
   file rewritten some other day. `pocock` fails the run on top of that;
   `spec-kit` succeeds and still says it.
 
-  The line it stops at is git's own ignore rules, and it is worth being
-  exact about which half of your repo that leaves out. Reading every ignored
-  path on every run means reading the whole of `node_modules`, which is the
-  cost that made this unrecordable in the first place — but "ignored" is not
-  only build output. A `.env`, a `.claude/settings.local.json`, a local
-  config you keep out of git on purpose: those hold real work, they are
-  ignored, and a run that writes over one is **not** reported. That is the
-  part still open, said here rather than left in a comment.
+  That covers what you keep in git and what you keep beside it, because
+  "ignored" is two populations and not one. `node_modules` is ignored because
+  it is regenerable and nobody would miss it; a `.env`, a
+  `.claude/settings.local.json`, a local config you keep out of git on purpose
+  are ignored for the opposite reason — not because they do not matter, but
+  because they are not the repo's to carry. Those are exactly what a session
+  being helpful about configuration writes into, so they are fingerprinted
+  like anything else, and a run that writes over one says so.
+
+  Says so, and stops there. `pocock` refuses a run that wrote anything beyond
+  its map, and it works that refusal out from the same diff — so making the
+  ignored files count as "wrote something" would have made them count as
+  "failed", and a driver that throws away a billed session because an agent
+  touched a log file has been made worse rather than better.
+  `paths_changed_since_snapshot`, which is the list a driver fails on, leaves
+  them out; `restore_repo_state`, which only tells you, names them. An ignored
+  file the run *created* is a different matter and always has been: it is new,
+  nothing of yours was in it, and it has always failed the run.
+
+  What keeps that affordable is that git already separates the two:
+  `git status --porcelain --untracked-files=normal --ignored=traditional`
+  collapses a directory every entry of which is ignored to a single
+  `node_modules/` line and never descends into it, while listing an ignored
+  *file* by name. On a 113 MB, 28,971-file `node_modules` beside one `.env`,
+  the whole listing is two lines and exactly one path gets hashed. The
+  untracked mode is spelled out because it, not `--ignored`, is what does the
+  collapsing — and it is a config setting, so a repo with
+  `status.showUntrackedFiles = all` would otherwise list all 28,971 of them
+  and one with `no` would report nothing ignored at all.
+
+  **The line it stops at**, then, is the inside of a wholly-ignored directory,
+  plus a cap. Nothing under `node_modules/` is looked at, so a run that
+  rewrites something in there is not reported — which is the cost judged worth
+  keeping. And because tidy ignore rules are an assumption rather than a
+  guarantee — a `*.log` pattern matching files that sit among tracked ones has
+  git list every one of them individually — the fingerprinting stops after
+  **500** of those ignored files. On 20,001 of them totalling 78 MB, hashing
+  the lot takes 1.5s against 0.08s for the first 500. A repo that trips that
+  cap is told so on every run, whether or not anything was written over —
+  because on such a repo the usual silence does not mean *nothing of yours was
+  written over*, it means *nothing among the part I looked at*, and those are
+  not the same sentence.
 
   One more path is exempt from *that* report, for a different reason: the
   driver's own `fixed_path`. Writing that file is what the run is *for*, so
