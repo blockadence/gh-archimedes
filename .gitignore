@@ -19,6 +19,12 @@ Thumbs.db
 *.log
 /tmp/
 
+# Run records, for anyone who runs a driver out of this checkout by hand
+# rather than out of an instance. The suite itself points --root at a work
+# directory of its own (tests/helpers.sh says why), so nothing here comes
+# from running the tests.
+/.archimedes-runs/
+
 # Go CLI build output
 /archimedes
 /archimedes.exe

@@ -2,3 +2,10 @@
 # about conditions that are new. Per-machine and disposable:
 # delete it and the next pass reports the current backlog again.
 .archimedes-notify.json
+
+# The runs archimedes had under way, one directory each, holding the
+# snapshot that would put a target repo back if a run died before it could.
+# Per-machine and about repos elsewhere on this machine, so it is no more
+# this instance's history than the file above: `unfinished-runs`
+# is what reads them, and a run that ends well takes its own away.
+.archimedes-runs/

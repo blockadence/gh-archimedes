@@ -40,6 +40,7 @@ tracking/spawning/pruning the worktrees used to execute it.`,
 	root.AddCommand(newContextMapCmd())
 	root.AddCommand(newRunDriverCmd())
 	root.AddCommand(newDriversCmd())
+	root.AddCommand(newUnfinishedRunsCmd())
 	root.AddCommand(newSpawnCmd())
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newPruneCmd())

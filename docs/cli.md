@@ -1244,6 +1244,7 @@ passing after the recipe it copied had changed.
 - `context-map` — sequence a context-mapping pass across every repo
 - `run-driver` — invoke one context-mapping driver directly
 - `drivers` — list the drivers an instance can run, and where each is from
+- `unfinished-runs` — repos a driver run left dirty and never put back
 - `spawn` — create the branch and worktree for one unit of work
 - `status` — live PR/branch state across every spawned worktree
 - `prune` — remove worktrees whose PR has merged or closed
@@ -1468,13 +1469,80 @@ a driver is running, `archimedes` can no longer be stopped by an interrupt
 at all, only by a `SIGKILL` that strands whatever the run left in the target
 repo, which is the outcome the waiting exists to avoid.
 
-What this does not do is close the windows `repo-snapshot.sh` names. A
-driver that was `SIGKILL`'d, or that died with the machine, never runs its
-trap at all, and nothing outside it holds the snapshot; that is the other,
-more expensive half of what that file asks for.
-`internal/driver/interrupt.go` is the whole of the forwarding, and
+What forwarding does not reach is a driver that never runs its trap at all —
+a `SIGKILL`, an OOM kill, a machine that loses power — which is the other,
+more expensive half of what `repo-snapshot.sh` asks for and is the next
+section. `internal/driver/interrupt.go` is the whole of the forwarding, and
 `tests/interrupted_run.sh` drives it through the installed binary with the
 signal aimed at the `archimedes` pid alone rather than at a process group.
+
+### A run that dies without its trap
+
+A driver killed outright leaves the target repo exactly as its session left
+it, and no shell can be written that survives that. What survives it is a
+file, so `archimedes` writes one before it starts a driver:
+`.archimedes-runs/<driver>-<n>/` under the instance, holding `run.yaml` —
+which repo, which driver, when, under which pid — and the path the driver is
+asked to leave its snapshot at, handed over in `ARCHIMEDES_RUN_SNAPSHOT`.
+`internal/runrecord` owns all of that.
+
+The snapshot is the driver's own, not a second one: taking one walks the
+working tree and lists ignored paths, which on a repo with a `node_modules`
+is not free, and a runner taking its own would be paying that twice per run.
+So the driver writes where it is told (`take_run_snapshot`), under a partial
+name renamed into place so nothing ever reads a half-taken snapshot, and
+**gives the file up only once the repo is back** (`release_snapshot`, versus
+`hand_over_snapshot` where the rollback failed or refused). That release is
+the protocol: it is the one statement a process that was `SIGKILL`'d cannot
+make, so a snapshot still there when a run ends means the repo was not put
+back.
+
+Where the driver died and `archimedes` is still alive, `archimedes` re-runs
+that driver's rollback itself — `drivers/lib/backstop.sh`, which is
+`restore_repo_state` and no second implementation of it, run from
+`internal/driver/backstop.go`. It is a backstop and stays one: it acts only
+on a run that did not end well, and only on a snapshot the driver left
+behind, so a driver that got to its own trap is never run over the top of.
+Issue 38 turned down moving rollback into the runner and that still holds —
+the runner has no git knowledge, it borrows the drivers'.
+
+Where `archimedes` was killed too, nothing can act at the time and the
+record is what is left. `unfinished-runs` reports it: which repo, and what
+the run left sitting in there, read out of the same diff and writing nothing
+to the repo. `unfinished-runs restore <id>` re-runs the rollback when the
+operator asks, and `forget <id>` drops a record they have dealt with
+themselves. Acting is deliberate rather than automatic because by then the
+run may be days old — and a repo whose `HEAD` has moved since is refused
+outright by `snapshot_head_unmoved`, exactly as it is on the driver's own
+path. `run-driver` and `context-map` print a notice naming any outstanding
+record before they start, so the state is something an operator hears about
+rather than something they would have to go looking for.
+
+The record also carries the pid of the `archimedes` that opened it, and
+everything that acts on one asks whether that process is still there first
+(`Record.RunStillAlive`). On disk a run under way looks exactly like a run
+that died — the snapshot is there for the whole run — so without that check
+a second `archimedes` reading the directory would report somebody else's
+pass as a repo nobody put back, restore over the top of a live session's
+work, or clear a record out from under a run that still needs it. A live
+record is therefore listed as what it is and otherwise left alone: not
+cleared, not named in the notice, and refused by `restore` unless `--force`.
+That flag exists because a pid outlives its process as a number — a record
+can survive the reboot that ended its run and find the number belongs to
+something else by then — and only the operator can see that.
+
+The lifetime is the other half of it: a run that ends with `archimedes`
+alive closes its own record, and `unfinished-runs` (including the notice)
+clears away any record with nothing left in it — a driver that put the repo
+back under an `archimedes` that was killed before it could say so. What is
+never cleared automatically is a record still holding a snapshot. The
+directory is per-machine and about repos elsewhere on the machine, so
+`template/.gitignore` ignores it the way it ignores `.archimedes-notify.json`.
+
+`tests/dead_run_record.sh` drives both deaths through the installed binary:
+a driver that `SIGKILL`s itself mid-run with `archimedes` watching, and a
+run where `archimedes` is killed first and the driver after it, leaving a
+record for `unfinished-runs` to report, restore, and refuse.
 
 `run-driver`, a mapping pass, and `drivers` all build their `driver.Set`
 through the one `driver.SetFor` — `--root` or `ARCHIMEDES_DRIVERS_DIR` for

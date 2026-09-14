@@ -62,9 +62,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/../lib/repo-snapshot.sh"
 
 CONTEXT_MAP="CONTEXT.md"   # must match driver.yaml's fixed_path
 
-SNAPSHOT="$(mktemp)"
-trap 'rm -f "$SNAPSHOT"' EXIT
-snapshot_repo_state "$REPO_PATH" > "$SNAPSHOT"
+# Through the helper rather than into a temp file of this script's own,
+# because where the snapshot lands decides who can still act on it if this
+# process is killed outright. ../lib/repo-snapshot.sh has that, and what
+# releasing it says, beside the functions.
+SNAPSHOT="$(take_run_snapshot "$REPO_PATH")"
+# Until the rollback below is armed there is nothing in the repo to undo, so
+# the only thing owed on the way out of this window is the snapshot itself.
+trap 'release_snapshot "$SNAPSHOT"' EXIT
 
 # Everything from here on happens inside someone else's repo, so the
 # rollback can't hang off the success path or off hand-placed error
@@ -72,14 +77,18 @@ snapshot_repo_state "$REPO_PATH" > "$SNAPSHOT"
 # those would otherwise walk away leaving whatever the session had written
 # by then sitting in there. So restoring is the exit trap, disarmed only
 # once the run has succeeded and done its own restore.
+#
+# What it says on its way out, it says by what it does with the snapshot:
+# released means the repo is back, handed over means it is not.
 RESTORE_ON_EXIT=1
 cleanup() {
   local status=$?
-  if [ "$RESTORE_ON_EXIT" -eq 1 ]; then
-    restore_repo_state "$REPO_PATH" "$SNAPSHOT" \
-      || echo "could not roll $REPO_PATH back to how it was found -- it needs looking at by hand" >&2
+  if [ "$RESTORE_ON_EXIT" -eq 1 ] && ! restore_repo_state "$REPO_PATH" "$SNAPSHOT"; then
+    echo "could not roll $REPO_PATH back to how it was found -- it needs looking at by hand" >&2
+    hand_over_snapshot "$SNAPSHOT"
+  else
+    release_snapshot "$SNAPSHOT"
   fi
-  rm -f "$SNAPSHOT"
   exit "$status"
 }
 #

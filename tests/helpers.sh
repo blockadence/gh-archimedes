@@ -76,6 +76,18 @@ make_origin_and_clone() {
 # is current.
 ARCHIMEDES_BIN="$TESTS_REPO_ROOT/archimedes"
 
+# Every `run-driver` in this suite passes `--root "$WORK"`, and it is worth
+# saying once why rather than in eleven places. --root names the instance:
+# the drivers/ searched before the ones the binary ships -- none of these
+# tests has one, so every driver still resolves out of the binary -- and,
+# since a run is noted down while it is under way, where .archimedes-runs/
+# goes. Left at its default that is the checkout the suite runs from, so a
+# case that deliberately leaves a repo nothing can roll back (a session that
+# commits) would drop a record into this repository and nothing would ever
+# take it back. Pointed at the test's own work directory, the record goes
+# when the work directory does -- and the case still exercises exactly what
+# an operator gets, since an operator's --root is their instance.
+
 build_archimedes() {
   ( cd "$TESTS_REPO_ROOT" && go build -o archimedes ./cmd/archimedes ) || {
     echo "could not build the archimedes CLI" >&2

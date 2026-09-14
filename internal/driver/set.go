@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/blockadence/gh-archimedes/internal/runrecord"
 )
 
 // Set is where a driver is looked up by name, in two layers: the drivers an
@@ -35,6 +37,13 @@ type Set struct {
 	// Nil means this Set has no built-in layer, which in production it
 	// never is — see SetFor, the one place a Set is built.
 	Builtin fs.FS
+	// Records is where a run about to start is noted down, so that a repo
+	// a killed driver left dirty is one something outside that driver
+	// holds a record of (internal/runrecord, and backstop.go for what is
+	// done with one). Empty keeps no records and hands no snapshot path
+	// over, which is a Set built by hand rather than for an instance: the
+	// run is unaffected, and what it loses is the backstop.
+	Records runrecord.Dir
 }
 
 // SetFor is how a driver is looked up for an instance rooted at root: the
@@ -50,7 +59,10 @@ func SetFor(root, override string, builtin fs.FS) Set {
 	if dir == "" {
 		dir = filepath.Join(root, dirName)
 	}
-	return Set{Dir: dir, Builtin: builtin}
+	// Records stay under the instance root whichever drivers directory was
+	// named: ARCHIMEDES_DRIVERS_DIR moves where a driver is read from, not
+	// where this instance's bookkeeping lives.
+	return Set{Dir: dir, Builtin: builtin, Records: runrecord.For(root)}
 }
 
 // Run invokes the driver named name against repoPath and guarantees the
@@ -63,7 +75,7 @@ func (s Set) Run(name, repoPath, outputPath string, progress io.Writer) error {
 	}
 	defer release()
 
-	return runIn(dir, name, repoPath, outputPath, progress)
+	return runIn(dir, name, repoPath, outputPath, s.Records, progress)
 }
 
 // resolve returns a directory on disk holding the named driver, plus a

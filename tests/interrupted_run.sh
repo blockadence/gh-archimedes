@@ -132,7 +132,7 @@ start_a_run() {
 
   start_run_in_background "$1" \
     env ARCHIMEDES_DRIVERS_DIR="$DRIVERS" HANGS_DRIVER_STARTED="$STARTED" \
-    "$ARCHIMEDES_BIN" run-driver hangs "$REPO" "$WORK/harvested.md"
+    "$ARCHIMEDES_BIN" run-driver --root "$WORK" hangs "$REPO" "$WORK/harvested.md"
 
   # A bound of its own, not the stub driver's: this one waits for the driver
   # to scaffold, and that one waits, once it has, for a signal that never
