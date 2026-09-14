@@ -51,7 +51,7 @@ make_widget_repo "$REPO"
 echo "pocock driver end-to-end:"
 
 OUT="$WORK/CONTEXT.md"
-if "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
+if "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
   pass "driver run exits zero against a throwaway repo"
 else
   fail "driver run exits zero against a throwaway repo"

@@ -62,7 +62,7 @@ out_path="$WORK/out.md"
 # binary, which is the only reason a run from an empty directory can find it
 # at all.
 if err="$(cd "$WORK" && PATH="$SPECLESS_PATH" \
-    "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$out_path" 2>&1 >/dev/null)"; then
+    "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$out_path" 2>&1 >/dev/null)"; then
   fail "a run without the specify CLI installed exits non-zero"
 else
   pass "a run without the specify CLI installed exits non-zero"

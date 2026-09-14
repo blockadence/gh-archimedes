@@ -35,7 +35,9 @@
 #
 #   * SIGKILL, and a machine that loses power, cannot be trapped at all.
 #     The repo is left exactly as the session left it -- scaffolding,
-#     half-written map and all -- and nothing announces that.
+#     half-written map and all. Nothing this process does announces that,
+#     and nothing it could do would: the announcement has to come from
+#     somewhere it does not die from. See BACKED, below.
 #
 #   * A signal that was ignored when the driver started stays ignored.
 #     POSIX forbids a shell from trapping or restoring one, and bash sets
@@ -56,19 +58,70 @@
 #     rest does not, and the repo is left between the two states.
 #     Archimedes will not be the one to send it -- it forwards the first
 #     signal only, and answers the rest with a line -- but anything else
-#     signalling this process still can.
+#     signalling this process still can. The snapshot is not released
+#     until the restore has finished, so a repo left between the two
+#     states is one something outside can still be asked to finish: see
+#     BACKED.
 #
-# Each of those ends with an operator's repo dirty and no message saying
-# so. Closing them needs something outside the driver process -- a runner
-# that keeps the snapshot and re-runs the restore, rather than a shell
-# trying to clean up after its own death.
+# Each of those ends with an operator's repo dirty. What that used to mean
+# as well was no message saying so, and this file asked for the thing that
+# would fix it: something outside the driver process -- a runner that keeps
+# the snapshot and re-runs the restore, rather than a shell trying to clean
+# up after its own death.
 #
-# Archimedes is that outside process for the delivering and the waiting: it
-# passes the signal on, stays until this rollback has finished, relays what
-# the driver said about the repo, and exits with the status the driver
-# chose. It is not that outside process for the snapshot, which is what the
-# list above would need. A driver that never got to run its trap still
-# leaves a repo nobody holds a record of.
+# WHAT IS BACKED NOW, AND WHAT IS STILL NOT. Archimedes was already that
+# outside process for the delivering and the waiting: it passes the signal
+# on, stays until this rollback has finished, relays what the driver said
+# about the repo, and exits with the status the driver chose. It is now
+# that outside process for the snapshot too, which is what the list above
+# needed:
+#
+#   * The snapshot is taken where archimedes can find it again rather than
+#     into a temp file this process owns -- take_run_snapshot, below --
+#     beside a note on disk saying which repo the run is in. On disk
+#     before the run starts, because archimedes can be SIGKILL'd as easily
+#     as this can, and a snapshot held in the runner's memory would close
+#     nothing.
+#
+#   * Giving that snapshot up is the driver saying the repo is back, and
+#     it is the only thing a process killed outright cannot fake. So a
+#     snapshot still there when a run ends means the repo was not put
+#     back -- release_snapshot and hand_over_snapshot are the two ways a
+#     driver says which, and the reason both are called rather than
+#     `rm -f`.
+#
+#   * Archimedes, where it is still alive, then re-runs this rollback
+#     itself over that snapshot -- lib/backstop.sh, run from
+#     internal/driver. It is a backstop and stays one: it acts only on a
+#     run that did not end well and only on a snapshot the driver left
+#     behind, so a driver that got to its own trap is never run over the
+#     top of.
+#
+#   * Where archimedes died too, the record outlives them both, and
+#     `archimedes unfinished-runs` reports which repo it is and what the
+#     run left in there -- reading, writing nothing -- with `restore` to
+#     put it back when the operator asks.
+#
+# Three things that list still does not close, and they are the honest
+# remainder rather than an oversight:
+#
+#   * Nothing acts on its own after the machine comes back. A record is
+#     reported before the next mapping pass and acted on when an operator
+#     says so, because by then the run may be days old and writing to
+#     somebody's repository on the strength of that is not a thing to do
+#     on their behalf.
+#
+#   * A repo that has been committed to since is refused outright, by
+#     snapshot_head_unmoved, exactly as it is on the driver's own path.
+#     The backstop is this rollback, so it inherits every limit this
+#     rollback has -- including the one below about work written over,
+#     which no amount of standing outside the process can recover.
+#
+#   * The two windows above that are not deaths at all -- an ignored
+#     SIGINT, and a signal deferred while the session runs -- are
+#     untouched by any of it. Nothing has died there, so nothing is left
+#     behind to hold a record of: the driver is alive and either will get
+#     to its trap or is being held up by a session that will not stop.
 #
 # WHAT THE ROLLBACK CANNOT PUT BACK, EVEN WHEN IT RUNS TO THE END. The list
 # above is about a rollback that never got to finish. This one is about one
@@ -1152,6 +1205,91 @@ restore_repo_state() { # <repo-path> <snapshot-file> [<keep-relpath> ...]
   if [ "$dirs_unlisted" -eq 1 ]; then
     echo "could not list $repo's directories, so a directory this run created and left empty may still be there. Everything else is back as it was found." >&2
   fi
+}
+
+# WHERE A DRIVER'S SNAPSHOT GOES, AND WHO CLEARS IT AWAY.
+#
+# A driver takes one snapshot at the start of a run and holds it for as long
+# as the run lasts. Whose file that is is the difference between a rollback
+# that dies with the driver and one something else can finish, so the pair
+# below is the whole of the handover -- take it where archimedes can reach
+# it, and give it up only once the repo is really back.
+#
+# Nothing here changes what a driver does with the snapshot in between. It
+# is the same file, read by the same functions, and a driver run by hand
+# with no archimedes around gets a temp file and behaves exactly as it did
+# before any of this: the handover is an offer, not a requirement, and a
+# driver that never learns of it is not broken, only unbacked.
+
+# The suffix a snapshot is written under while it is still being written.
+# Half of a contract with the runner, which looks for the finished name and
+# has to know what the other one is called; internal/runrecord states the
+# same two spellings and cites this.
+ARCHIMEDES_SNAPSHOT_PARTIAL_SUFFIX=".partial"
+
+# Take <repo-path>'s snapshot and print the file it was left in.
+#
+# ARCHIMEDES_RUN_SNAPSHOT is archimedes asking for it somewhere it can find
+# again if this process dies -- a directory it made for this run, beside a
+# note saying which repo the run is in (internal/runrecord). Unset, this is
+# a temp file and the snapshot is the driver's own, which is what running a
+# driver by hand gets.
+#
+# Written under a .partial name and renamed into place, which is the part
+# worth being careful about. Snapshotting walks the tree, so a driver killed
+# during it leaves a file with some of the U records in it -- and a U record
+# is what stops the rollback deleting an untracked path. Restoring from a
+# half-written one would read every path it never got to as a path the run
+# added and delete the operator's work, so "the snapshot is there" has to
+# mean "the whole snapshot is there", and a rename is how that is said on a
+# filesystem. Everything downstream then reads the finished name only.
+#
+# Returns non-zero, having left no half-written file behind, if the
+# snapshot could not be taken or could not be moved into place. Both drivers
+# call this unguarded under errexit, so that ends the run before anything
+# has been written to the repo.
+take_run_snapshot() { # <repo-path>
+  local repo="$1" handover="${ARCHIMEDES_RUN_SNAPSHOT:-}" partial
+
+  if [ -z "$handover" ]; then
+    partial="$(mktemp)" || return 1
+    snapshot_repo_state "$repo" > "$partial" || { rm -f "$partial"; return 1; }
+    printf '%s\n' "$partial"
+    return 0
+  fi
+
+  partial="$handover$ARCHIMEDES_SNAPSHOT_PARTIAL_SUFFIX"
+  snapshot_repo_state "$repo" > "$partial" || { rm -f "$partial"; return 1; }
+  mv -f "$partial" "$handover" || { rm -f "$partial"; return 1; }
+  printf '%s\n' "$handover"
+}
+
+# Give <snapshot-file> up, because <repo-path> is back as it was found.
+#
+# This is the all-clear, and it is the only one there is. A driver that is
+# killed outright cannot say anything on its way out, so nothing a dying
+# process says could be the signal; what serves instead is a file it can
+# only remove by still being alive to remove it. So archimedes reads a
+# snapshot still sitting there after a run has ended as "the repo was not
+# put back" -- and that reading is only as true as this call is careful.
+# Release it where the rollback succeeded or where there was nothing to roll
+# back, and nowhere else.
+release_snapshot() { # <snapshot-file>
+  rm -f "$1"
+}
+
+# Leave <snapshot-file> for whatever is holding the record, because the repo
+# is not back: the rollback failed, or refused, and somebody is going to
+# have to deal with that repository.
+#
+# With no archimedes holding one, there is nothing to hand it to and nothing
+# that would ever read it again, so it goes -- a temp file nobody knows the
+# name of is not a backstop, and the driver has already said on stderr that
+# the repo needs looking at by hand. The asymmetry is the point of having
+# two functions rather than an `if` at each call site: what a driver says
+# here is which of the two happened, not what to do about it.
+hand_over_snapshot() { # <snapshot-file>
+  [ -n "${ARCHIMEDES_RUN_SNAPSHOT:-}" ] || rm -f "$1"
 }
 
 # Arm INT and TERM so that an interrupt takes the caller into its EXIT trap,

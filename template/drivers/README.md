@@ -113,6 +113,11 @@ drivers/
 The command has to be executable (`chmod +x`) — Archimedes runs it, it does
 not source it. Anything the command *sources* rather than runs should stay
 non-executable; `lib/repo-snapshot.sh` is the worked example.
+`lib/backstop.sh` is executed and stays non-executable too, which is not an
+inconsistency: nothing in `lib/` is a program a *driver* runs, Archimedes
+reaches that one as `bash backstop.sh …`, and an execute bit on it would put
+the question "which of these is runnable?" into a directory whose answer is
+otherwise "none of them".
 
 `lib/` is where a helper goes once more than one driver needs it. A driver
 reaches it at `../lib/` relative to its own directory, which resolves the
@@ -421,10 +426,58 @@ instead, because a second copy would land in a rollback already running and
 leave the repo between two states. So a driver gets one interrupt and as
 long as it needs to act on it.
 
-What no arrangement here can cover is `SIGKILL`, which can neither be
-forwarded nor trapped: a driver killed that way leaves the target repo
-exactly as its session left it. `lib/repo-snapshot.sh` names that window and
-the others beside it.
+What no arrangement *in your process* can cover is `SIGKILL`, which can
+neither be forwarded nor trapped: a driver killed that way leaves the target
+repo exactly as its session left it, and there is nothing you can write in a
+shell that changes that. What can cover it is something outside your
+process, and the section below is how a driver opts into one.
+`lib/repo-snapshot.sh` names that window and the others beside it.
+
+### Being killed outright
+
+Archimedes notes every run down on disk before it starts it — which repo,
+which driver, when — under `.archimedes-runs/` in the instance. A run that
+ends takes its own note away. One still there afterwards is a run that died,
+and it is the only thing that can say so, since both the driver and
+Archimedes can be `SIGKILL`'d.
+
+A note on its own would name the repo and nothing else, so a driver that
+snapshots is invited to leave the snapshot in it:
+
+- **`ARCHIMEDES_RUN_SNAPSHOT`** is a path Archimedes has made for this run.
+  Leave your snapshot there instead of in a temp file of your own.
+  `lib/repo-snapshot.sh`'s `take_run_snapshot` reads it for you — it is a
+  drop-in for `snapshot_repo_state > "$(mktemp)"`, it writes under a partial
+  name and renames, so nothing ever reads a half-taken snapshot, and it
+  falls back to a temp file when the variable is unset (a driver run by
+  hand).
+- **Giving that file up is how you say the repo is back**, and it is the one
+  statement a process that was killed cannot make by accident. So release it
+  where — and only where — your rollback succeeded or there was nothing to
+  roll back: `release_snapshot "$SNAPSHOT"`. Where the rollback failed or
+  refused, `hand_over_snapshot "$SNAPSHOT"` leaves it for whoever is holding
+  the record.
+
+What Archimedes does with it is a backstop and nothing more. Where the run
+did not end well *and* the snapshot is still there, it re-runs your own
+rollback (`lib/backstop.sh`, which is `restore_repo_state` and no second
+implementation of it) and tells the operator which repo it put back. A run
+that succeeded, or whose driver released the snapshot, is never touched:
+your rollback stays the primary, and this only ever runs where yours did
+not.
+
+Where Archimedes was killed too, nothing can act at the time, and what is
+left is the record. `unfinished-runs` reports which repo it is and what the
+run left sitting in there — reading only, writing nothing to any repo — and
+`unfinished-runs restore <id>` runs the rollback when the operator asks for
+it. That is deliberate rather than automatic: by then the run may be days
+old, and a repo whose `HEAD` has moved since is refused outright, the same
+way your own rollback refuses it.
+
+A driver that ignores the variable is not broken and nothing warns about it.
+It keeps its own snapshot, its own rollback works exactly as before, and
+what it does without is the backstop — which is where every driver was
+before any of this existed.
 
 ### Interrupt traps under `SIGINT` and `SIGTERM`
 

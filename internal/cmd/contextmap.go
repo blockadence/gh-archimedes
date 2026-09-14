@@ -7,6 +7,7 @@ import (
 
 	"github.com/blockadence/gh-archimedes"
 	"github.com/blockadence/gh-archimedes/internal/contextmap"
+	"github.com/blockadence/gh-archimedes/internal/runrecord"
 )
 
 // Environment variables a context-mapping pass honors, so an operator can
@@ -40,6 +41,10 @@ under drivers/ to build every map unattended instead; a single repo can
 override that default with a "driver" field of its own.`,
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
+			// Before the pass rather than after it: these are repos an
+			// earlier run left dirty, and a pass about to run drivers
+			// against a family of repos is exactly when that matters.
+			noticeUnfinishedRuns(runrecord.For(root), c.ErrOrStderr())
 			opts := contextMapOptions(root, dryRun, os.Getenv)
 			return contextmap.Run(opts, c.OutOrStdout(), c.ErrOrStderr(), c.InOrStdin())
 		},
