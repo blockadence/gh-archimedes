@@ -257,7 +257,7 @@ case "$INTERRUPT" in
   INT) expected_status=130 ;;
   TERM) expected_status=143 ;;
 esac
-[ "$INTERRUPT" = "INT" ] || echo "  (SIGINT is ignored in this shell and cannot be restored; interrupting with SIG$INTERRUPT)"
+announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 for shape in dies traps; do
   case "$shape" in
@@ -268,22 +268,20 @@ for shape in dies traps; do
   fresh_repo "$REPO"
   SENTINEL="$WORK/session-started-$shape"
   rm -f "$SENTINEL" "$SENTINEL.signalled"
-  # `set -m` gives the driver a process group of its own, so the interrupt
-  # can be delivered the way a real one is -- to the driver and its session
+  # The process group start_run_in_background hands out is what this file
+  # wants from it beyond the signal disposition: the interrupt can then be
+  # delivered the way a real one is -- to the driver and its session
   # together -- without taking this test process down with it.
-  set -m
-  CLAUDE_STUB_MODE=hang CLAUDE_STUB_SENTINEL="$SENTINEL" CLAUDE_STUB_ON_SIGNAL="$shape" \
-    "$DRIVER_BIN" "$REPO" >"$WORK/killed-$shape.log" 2>&1 &
-  driver_pid=$!
-  set +m
+  start_run_in_background "$WORK/killed-$shape.log" \
+    env CLAUDE_STUB_MODE=hang CLAUDE_STUB_SENTINEL="$SENTINEL" CLAUDE_STUB_ON_SIGNAL="$shape" \
+    "$DRIVER_BIN" "$REPO"
 
-  waited=0
-  until [ -f "$SENTINEL" ] || [ "$waited" -ge 300 ]; do sleep 0.1; waited=$((waited + 1)); done
-
-  if [ ! -f "$SENTINEL" ]; then
+  # A bound of its own. The stub's backstop above is 300 too and is not this
+  # number: that one bounds a started session's wait for a signal, this one
+  # bounds the wait for the session to start at all.
+  if ! wait_until_under_way "$SENTINEL" 300; then
     fail "interrupted mid-run, $shape_label: the driver got as far as the session (timed out waiting)"
-    kill -KILL -"$driver_pid" 2>/dev/null
-    wait "$driver_pid" 2>/dev/null
+    abandon_run process-group
     continue
   fi
 
@@ -291,8 +289,9 @@ for shape in dies traps; do
   assert_dir_exists "$REPO/.specify" \
     "interrupted mid-run, $shape_label: the scaffolding really is in the repo at the moment of the kill"
 
-  kill -"$INTERRUPT" -"$driver_pid" 2>/dev/null
-  wait "$driver_pid"; killed_status=$?
+  # The group, with the leading dash: the driver and its session together.
+  kill -"$INTERRUPT" -"$RUN_PID" 2>/dev/null
+  wait "$RUN_PID"; killed_status=$?
 
   # Asked before anything else, because every assertion below it is only
   # worth reading once the signal is known to have landed. A driver that was

@@ -115,30 +115,29 @@ case "$INTERRUPT" in
   INT) EXPECTED_STATUS=130 ;;
   TERM) EXPECTED_STATUS=143 ;;
 esac
-[ "$INTERRUPT" = "INT" ] || echo "  (SIGINT is ignored in this shell and cannot be restored; interrupting with SIG$INTERRUPT)"
+announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 # Starts a run and waits until the driver is really under way, leaving
-# $ARCHIMEDES_PID holding the one process every case here signals.
+# $RUN_PID holding the one process every case here signals.
+#
+# The process group start_run_in_background hands out is incidental here --
+# archimedes puts the driver in one of its own regardless, so the kill below
+# reaches the driver only by being forwarded. What that helper is there for
+# is the signal disposition, which nothing downstream could restore.
 # <log-file> -> 0 once the driver has scaffolded, 1 if it never got there.
 start_a_run() {
   rm -rf "$REPO"
   make_widget_repo "$REPO"
   rm -f "$STARTED"
 
-  # `set -m` for the disposition, not for the group: a command bash starts
-  # asynchronously without job control inherits SIGINT ignored, and nothing
-  # downstream can restore it. The group it also hands out is incidental
-  # here -- archimedes puts the driver in one of its own regardless, so the
-  # kill below reaches the driver only by being forwarded.
-  set -m
-  ARCHIMEDES_DRIVERS_DIR="$DRIVERS" HANGS_DRIVER_STARTED="$STARTED" \
-    "$ARCHIMEDES_BIN" run-driver hangs "$REPO" "$WORK/harvested.md" >"$1" 2>&1 &
-  ARCHIMEDES_PID=$!
-  set +m
+  start_run_in_background "$1" \
+    env ARCHIMEDES_DRIVERS_DIR="$DRIVERS" HANGS_DRIVER_STARTED="$STARTED" \
+    "$ARCHIMEDES_BIN" run-driver hangs "$REPO" "$WORK/harvested.md"
 
-  local waited=0
-  until [ -f "$STARTED" ] || [ "$waited" -ge 600 ]; do sleep 0.1; waited=$((waited + 1)); done
-  [ -f "$STARTED" ]
+  # A bound of its own, not the stub driver's: this one waits for the driver
+  # to scaffold, and that one waits, once it has, for a signal that never
+  # comes.
+  wait_until_under_way "$STARTED" 600
 }
 
 # The same run, with the one outcome no case below can carry on from: a
@@ -151,8 +150,7 @@ start_a_run_or_bail() {
     return 0
   fi
   fail "$2: the driver gets as far as scaffolding the repo (timed out waiting)"
-  kill -KILL "$ARCHIMEDES_PID" 2>/dev/null
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  abandon_run process
   report
   exit
 }
@@ -169,8 +167,8 @@ assert_file_exists "$REPO/HUNG.md" \
 
 # No leading dash: this is the process, not the group. A driver that hears
 # about it heard about it from archimedes.
-kill -"$INTERRUPT" "$ARCHIMEDES_PID" 2>/dev/null
-wait "$ARCHIMEDES_PID"; STATUS=$?
+kill -"$INTERRUPT" "$RUN_PID" 2>/dev/null
+wait "$RUN_PID"; STATUS=$?
 
 # Asked first, because everything below is only worth reading once the
 # rollback is known to have run at all: a run that finished normally leaves
@@ -216,15 +214,15 @@ echo "a second signal, from an operator who thought the first did nothing:"
 LOG="$WORK/interrupted-twice.log"
 start_a_run_or_bail "$LOG" "a second signal"
 
-kill -"$INTERRUPT" "$ARCHIMEDES_PID" 2>/dev/null
+kill -"$INTERRUPT" "$RUN_PID" 2>/dev/null
 # Sent on seeing the driver say it has begun, which is what puts it inside
 # the window the rollback occupies rather than before or after it.
 waited=0
 until grep -q "rolling $REPO back" "$LOG" 2>/dev/null || [ "$waited" -ge 600 ]; do
   sleep 0.1; waited=$((waited + 1))
 done
-kill -"$INTERRUPT" "$ARCHIMEDES_PID" 2>/dev/null
-wait "$ARCHIMEDES_PID"; STATUS=$?
+kill -"$INTERRUPT" "$RUN_PID" 2>/dev/null
+wait "$RUN_PID"; STATUS=$?
 
 assert_contains "$(cat "$LOG" 2>/dev/null)" "SIG$INTERRUPT again" \
   "archimedes tells the operator what it is still waiting for rather than passing the second signal on"
