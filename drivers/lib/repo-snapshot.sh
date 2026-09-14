@@ -106,6 +106,25 @@
 # Requires bash 4+ for associative arrays, same as the drivers that source
 # it. Sourced, not run: `source ../lib/repo-snapshot.sh`.
 
+# True when every status handed to it is zero.
+#
+# One line at a call site that would otherwise be three, and the three are the
+# ones this file's header warns about being copied: a producer's status
+# captured, then tested, on the failure path where nobody is watching. Reached
+# for only where a pipeline has two producers to answer for -- a single one is
+# `[ "${PIPESTATUS[0]}" -eq 0 ] || return 1` here as it is everywhere else.
+#
+# The arguments are expanded before this runs, which is the whole point: the
+# first `[` of a hand-written pair replaces PIPESTATUS with its own
+# one-element status, so the second index would be an unset one -- under the
+# `set -u` every driver sets, not a failed check but a dead shell.
+producers_ok() { # <status>...
+  local status
+  for status in "$@"; do
+    [ "$status" -eq 0 ] || return 1
+  done
+}
+
 # Print a snapshot of <repo-path>'s working state as NUL-terminated
 # "<kind><TAB><value>" records:
 #
@@ -153,29 +172,79 @@
 # What that costs is bounded by how much the operator has going at once rather
 # than by how big the checkout is -- which is the whole reason the line is
 # drawn here, and is worth re-measuring rather than trusting if it ever moves.
+#
+# Returns non-zero, having printed whatever it got to by then, if any read it
+# makes could not be made -- and does so on its own account rather than on
+# the caller's. Four of them are a producer piped into a loop, and the status
+# of a pipeline is the loop's, which is zero however badly the read in front
+# of it went; so each of those is taken out of PIPESTATUS, which is there
+# whatever options the caller set. The fifth is the call at the end, whose
+# status is already its own. `pipefail` would carry the same statuses
+# out, and both drivers do set it, but a guarantee that holds only while
+# every caller keeps an option on is a guarantee written down nowhere a third
+# caller would find it -- and the one it is about here is the U records,
+# where losing it is not a thinner report. No U records is byte-for-byte "the
+# operator had no untracked paths", so a rollback deletes every untracked
+# path they did have and returns 0.
+#
+# Which is the same argument changed_since_snapshot makes about its own
+# reads, reached the same way -- see the note there about why a process
+# substitution is not what any of these are read through.
+#
+# The read this does *not* cover is the first one, `rev-parse --verify -q
+# HEAD`, whose non-zero status is discarded on purpose: git answers a repo
+# with no commits yet and a rev-parse that fell over with the same 1, so
+# there is nothing here to tell them apart with, and the reading that fails
+# every first run against a fresh repo is the wrong one to pick. What comes
+# of that is an empty <head>, which is the no-commits answer the two
+# functions below are careful to keep distinct from a read that failed.
+#
+# Printed as it goes, so a caller holding the output has a partial snapshot
+# rather than none. Checked rather than assumed for the two that do: both
+# drivers call this unguarded under errexit with the temp file already in an
+# EXIT trap (drivers/spec-kit/run.sh:69, drivers/pocock/run.sh:67), so a
+# non-zero status ends the run before anything reads it back.
 snapshot_repo_state() { # <repo-path>
   local repo="$1" head
   head="$(git -C "$repo" rev-parse --verify -q HEAD || true)"
   printf 'H\t%s\0' "$head"
 
+  # Each check has to be the very next command after its pipeline, since the
+  # next one overwrites PIPESTATUS -- which is why this is written out once
+  # per read rather than shared.
+  #
+  # The walk included, which no bullet of the issue that added the other
+  # three names. It is the same read through the same shape, and a snapshot
+  # with no D records has every directory in the repo afterwards reading as
+  # one the run created -- so leaving the one of the four that is not a git
+  # call still borrowing the caller's options would be the asymmetry this was
+  # closing, one read smaller.
   list_repo_dirs "$repo" | while IFS= read -r -d '' d; do
     printf 'D\t%s\0' "$d"
   done
+  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
   git -C "$repo" ls-files --others -z | while IFS= read -r -d '' p; do
     printf 'U\t%s\0' "$p"
   done
+  [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
   if [ -n "$head" ]; then
     git -C "$repo" diff --name-only -z HEAD | while IFS= read -r -d '' p; do
       printf 'M\t%s\0' "$p"
     done
+    [ "${PIPESTATUS[0]}" -eq 0 ] || return 1
   fi
 
+  # Two producers rather than one -- the listing and the fingerprinting of it
+  # -- so both are answered for. The loop's own status is left out, here and
+  # above: what these checks are about is a read that could not be made.
   uncommitted_work_paths "$repo" "$head" \
     | fingerprint_paths "$repo" \
     | while IFS= read -r -d '' record; do
         printf 'B\t%s\0' "$record"
       done
+  producers_ok "${PIPESTATUS[0]}" "${PIPESTATUS[1]}" || return 1
 
+  # No pipeline and so nothing to unpick: a function call's status is its own.
   fingerprint_ignored_files "$repo"
 }
 
@@ -247,12 +316,20 @@ fingerprint_ignored_files() { # <repo-path>
   fi
   [ "${#ignored[@]}" -gt 0 ] || return 0
 
+  # The last of this file's producers piped into a loop, and read the same
+  # way the rest are: out of PIPESTATUS rather than out of the pipeline, so a
+  # fingerprinting that could not run is not answered with the no records
+  # that reads as a repo ignoring nothing worth watching. The two reads
+  # either side of it already carry their own status -- the listing above out
+  # of its own PIPESTATUS, the spool into the array by return -- so this is
+  # the whole of what was left borrowed from the caller here.
   local record
   printf '%s\0' "${ignored[@]}" \
     | fingerprint_paths "$repo" \
     | while IFS= read -r -d '' record; do
         printf 'G\t%s\0' "$record"
       done
+  producers_ok "${PIPESTATUS[0]}" "${PIPESTATUS[1]}" || return 1
 }
 
 # Print, NUL-terminated, the paths in <repo-path> git is ignoring and lists
@@ -338,12 +415,19 @@ ignored_file_paths() { # <repo-path>
 # on if anything moved in between.
 uncommitted_work_paths() { # <repo-path> <head>
   local repo="$1" head="$2"
-  git -C "$repo" ls-files --others --exclude-standard -z
+  # A `|| return 1` on each read rather than neither, because a function's
+  # status is its last command's: without them a listing that fell over is
+  # answered for by whichever read came after it, and the untracked one --
+  # which is never last -- could not be answered for at all. Its caller pipes
+  # this into the fingerprinting, where the status is read out of PIPESTATUS,
+  # so what is said here is what is heard there whatever options are set.
+  git -C "$repo" ls-files --others --exclude-standard -z || return 1
   # An `if` rather than a trailing `&&`, which would hand back a non-zero
-  # status for a repo with no commits yet -- and this runs in a pipeline
-  # inside a driver with `set -o pipefail`, where that ends the run.
+  # status for a repo with no commits yet -- the case the line above must not
+  # be allowed to swallow, since "there is no HEAD to diff against" and "the
+  # diff failed" are the two answers this whole shape exists to tell apart.
   if [ -n "$head" ]; then
-    git -C "$repo" diff --name-only -z HEAD
+    git -C "$repo" diff --name-only -z HEAD || return 1
   fi
 }
 

@@ -926,10 +926,12 @@ else
 fi
 assert_eq "$out" "" "and says nothing while it fails, so nothing reads as a report"
 
-# The half that was already right, pinned so it stays that way: the
-# fingerprinting in snapshot_repo_state is the last pipeline of the function,
-# so pipefail carries its status out and a driver's `set -e` ends the run
-# before a session ever starts.
+# And the snapshot half, where a fingerprinting that could not run means no B
+# records and no G ones -- which is a snapshot saying the operator had nothing
+# in flight. Under the options a driver sets, so that a failure here ends the
+# run before a session ever starts; the same check under a shell with no
+# pipefail is in the section at the end of this file, which is what makes this
+# one a property of the function rather than of the options.
 ( set -euo pipefail; snapshot_repo_state "$REPO17" > "$WORK/snapshot17-failed" )
 snap17=$?
 if [ "$snap17" -eq 0 ]; then
@@ -1156,10 +1158,11 @@ fi
 # repo then reads as one the run created, and the rollback prunes the empty
 # ones the operator had.
 #
-# The walk is not the last pipeline of the function -- the fingerprinting is
-# -- so it is errexit rather than pipefail alone that has to end the run here,
-# which is why the spelling above matters more for this one than for any other
-# check in this file.
+# The walk is not the last pipeline of the function, so its status reaches a
+# driver only if something carries it there -- errexit on a function that said
+# so itself, rather than pipefail on a pipeline that has long since been
+# followed by others. Which is why the spelling above matters more for this
+# one than for any other check in this file.
 ( set -euo pipefail; snapshot_repo_state "$REPO19" > "$WORK/snapshot19-failed" )
 snap19=$?
 if [ "$snap19" -eq 0 ]; then
@@ -1190,5 +1193,208 @@ assert_contains "$out" "scratch-note.md" \
   "and the work the run wrote over is still named, which is the report nothing else will make"
 
 unset -f find
+
+echo ""
+echo "repo snapshot, a caller that set no pipefail:"
+
+# Every check above that asks whether snapshot_repo_state fails asks it under
+# `set -euo pipefail`, the options both drivers set -- and under pipefail a
+# producer that fell over in the middle of a pipeline carries its own status
+# out to the shell whatever the function did about it. So those checks pass
+# against a snapshot half whose honesty is really the caller's, and the shell
+# that tells the two apart is the one nothing else in this file runs anything
+# in: `set -eu` with pipefail off.
+#
+# Off explicitly rather than left unset, because this file runs under
+# `set -uo pipefail` and a subshell inherits it -- so `( set -eu; ... )`, the
+# obvious spelling, is still a pipefail shell and still passes against the bug.
+# As statements of their own with the status read afterwards, for the reason
+# the no-commits section gives about errexit inside an `if` condition.
+#
+# The U records are the worst of what is at stake, and they are why this is
+# worth a section of its own rather than a note about shell options. No U
+# records is byte-for-byte "the operator had no untracked paths", so every
+# untracked path they did have reads afterwards as one the run added: the
+# rollback deletes the lot and returns 0, which is a rollback destroying the
+# uncommitted work these helpers exist to leave alone, silently.
+REPO27="$WORK/repo27"
+mkdir -p "$REPO27/src"
+echo "# readme" > "$REPO27/README.md"
+echo "console.log('hi')" > "$REPO27/src/index.js"
+printf '.env\n' > "$REPO27/.gitignore"
+make_repo_at "$REPO27"
+
+# One of each thing the snapshot reads for: an untracked note (a U record and
+# a B record), an edit to a tracked file (an M record and a B record), and an
+# ignored file git lists by name (a G record).
+echo "notes to self" > "$REPO27/scratch-note.md"
+echo "console.log('edited by me')" > "$REPO27/src/index.js"
+echo "API_KEY=the-real-one" > "$REPO27/.env"
+
+# The same stand-in git the section above uses, rebuilt here rather than left
+# installed across the sections in between: each flag breaks one read while
+# everything around it still works.
+GIT_STAND_IN_FLAG=""
+git() { # <arg>...
+  local a
+  for a in "$@"; do
+    if [ "$a" = "$GIT_STAND_IN_FLAG" ]; then return 1; fi
+  done
+  command git "$@"
+}
+
+GIT_STAND_IN_FLAG="--others"
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_others=$?
+if [ "$snap27_others" -eq 0 ]; then
+  fail "snapshotting fails when the untracked listing cannot be made, under a caller with errexit and no pipefail"
+else
+  pass "snapshotting fails when the untracked listing cannot be made, under a caller with errexit and no pipefail"
+fi
+
+# The M records, which are what tells a tracked file the operator had already
+# edited apart from one the run clobbered. Lose them and the rollback checks
+# the operator's own edit back out of HEAD.
+GIT_STAND_IN_FLAG="--name-only"
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_tracked=$?
+if [ "$snap27_tracked" -eq 0 ]; then
+  fail "and when the tracked-file read cannot be made"
+else
+  pass "and when the tracked-file read cannot be made"
+fi
+
+# The B records, reached through uncommitted_work_paths -- the first stage of
+# a three-stage pipeline, which is the stage a pipefail-less shell has never
+# had a word about.
+GIT_STAND_IN_FLAG="--exclude-standard"
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_work=$?
+if [ "$snap27_work" -eq 0 ]; then
+  fail "and when the listing behind the fingerprinted records cannot be made"
+else
+  pass "and when the listing behind the fingerprinted records cannot be made"
+fi
+
+# And the G records' listing, which already carried its own status out of
+# PIPESTATUS -- pinned here so that it keeps doing so in the shell where it
+# would be the only one that did not.
+GIT_STAND_IN_FLAG="--ignored=traditional"
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_ignored=$?
+if [ "$snap27_ignored" -eq 0 ]; then
+  fail "and when the ignored listing cannot be made"
+else
+  pass "and when the ignored listing cannot be made"
+fi
+
+# uncommitted_work_paths asked on its own, with neither option set: this file's
+# own shell has no errexit, so what comes back here is the function's own
+# status rather than a shell reacting to a command that failed inside it. Both
+# its reads, because it is two of them in a row and only the second has ever
+# been the one the caller sees.
+HEAD27="$(command git -C "$REPO27" rev-parse HEAD)"
+GIT_STAND_IN_FLAG="--exclude-standard"
+uncommitted_work_paths "$REPO27" "$HEAD27" >/dev/null 2>&1
+work27_untracked=$?
+if [ "$work27_untracked" -eq 0 ]; then
+  fail "the listing of work in flight carries its untracked read's failure out itself, rather than leaving it to the caller's errexit"
+else
+  pass "the listing of work in flight carries its untracked read's failure out itself, rather than leaving it to the caller's errexit"
+fi
+
+GIT_STAND_IN_FLAG="--name-only"
+uncommitted_work_paths "$REPO27" "$HEAD27" >/dev/null 2>&1
+work27_tracked=$?
+if [ "$work27_tracked" -eq 0 ]; then
+  fail "and its tracked read's, which is the one whose status the caller happened to be getting anyway"
+else
+  pass "and its tracked read's, which is the one whose status the caller happened to be getting anyway"
+fi
+
+# The guard that makes the two reads above worth telling apart from each
+# other: a repo with no commits yet has no HEAD to diff against, which is not
+# a read that failed, and answering it with a non-zero status would fail every
+# first run against a fresh repo.
+GIT_STAND_IN_FLAG=""
+unset -f git
+REPO28="$WORK/repo28"
+mkdir -p "$REPO28"
+git init -q "$REPO28"
+echo "started, not committed" > "$REPO28/scratch-note.md"
+uncommitted_work_paths "$REPO28" "" > "$WORK/work28" 2>/dev/null
+work28=$?
+if [ "$work28" -eq 0 ]; then
+  pass "a repo with no commits yet is still not a read that failed, which is the distinction the whole of this is about"
+else
+  fail "a repo with no commits yet is still not a read that failed, which is the distinction the whole of this is about"
+fi
+assert_contains "$(tr '\0' '\n' < "$WORK/work28")" "scratch-note.md" \
+  "and it still lists the work sitting there, HEAD or no HEAD"
+
+# The fingerprinting, which is the middle stage of the B records' pipeline and
+# so is a second status a pipefail-less shell never saw. The stand-in is the
+# one the fingerprinting section above uses, for the reason given there.
+FINGERPRINT_PATHS_REAL="$(declare -f fingerprint_paths)"
+[ -n "$FINGERPRINT_PATHS_REAL" ] || { echo "could not capture the real fingerprint_paths to put back" >&2; exit 1; }
+fingerprint_paths() { return 1; }
+
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_fingerprint=$?
+if [ "$snap27_fingerprint" -eq 0 ]; then
+  fail "snapshotting fails when the fingerprinting cannot run, under a caller with errexit and no pipefail"
+else
+  pass "snapshotting fails when the fingerprinting cannot run, under a caller with errexit and no pipefail"
+fi
+
+# The G records' own fingerprinting, asked of fingerprint_ignored_files rather
+# than through a snapshot: with the stand-in failing every call, the B records'
+# pipeline fails first and a snapshot never reaches this one. Same pipeline
+# shape, same residual, and the only way to put a check on it.
+( set -eu +o pipefail; fingerprint_ignored_files "$REPO27" > /dev/null )
+ignored27_fingerprint=$?
+if [ "$ignored27_fingerprint" -eq 0 ]; then
+  fail "the G records fail when their fingerprinting cannot run, rather than reading as a repo ignoring nothing worth watching"
+else
+  pass "the G records fail when their fingerprinting cannot run, rather than reading as a repo ignoring nothing worth watching"
+fi
+
+eval "$FINGERPRINT_PATHS_REAL"
+
+# And the directory walk, the one read of the five that is not a git call.
+# Its records are the D ones, and a snapshot missing them has every directory
+# in the repo afterwards reading as one the run created -- so the rollback
+# prunes the empty ones the operator had.
+find() { return 1; }
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_walk=$?
+if [ "$snap27_walk" -eq 0 ]; then
+  fail "snapshotting fails when the directory walk cannot be made, under a caller with errexit and no pipefail"
+else
+  pass "snapshotting fails when the directory walk cannot be made, under a caller with errexit and no pipefail"
+fi
+unset -f find
+
+# The other half of all of it: with every read working, the same shell gets a
+# snapshot and a zero status, with every kind of record in it. A section made
+# only of checks that something fails is a section a function returning 1
+# unconditionally would pass.
+( set -eu +o pipefail; snapshot_repo_state "$REPO27" > "$WORK/snapshot27" )
+snap27_ok=$?
+assert_eq "$snap27_ok" "0" \
+  "and a repo every one of those reads can be made against still snapshots cleanly in that shell"
+snap27="$(tr '\0' '\n' < "$WORK/snapshot27")"
+assert_contains "$snap27" "$(printf 'U\tscratch-note.md')" \
+  "with the untracked path recorded"
+assert_contains "$snap27" "$(printf 'M\tsrc/index.js')" \
+  "the tracked file the operator had already edited recorded"
+assert_contains "$snap27" "$(printf 'D\tsrc')" \
+  "the directory recorded"
+assert_contains "$snap27" \
+  "$(printf 'B\t%s\t%s' "$(cd "$REPO27" && git hash-object --no-filters -- scratch-note.md)" scratch-note.md)" \
+  "and the work in flight fingerprinted by content"
+assert_contains "$snap27" \
+  "$(printf 'G\t%s\t%s' "$(cd "$REPO27" && git hash-object --no-filters -- .env)" .env)" \
+  "the ignored file git lists by name fingerprinted alongside it"
 
 report
