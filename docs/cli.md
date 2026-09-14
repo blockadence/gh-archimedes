@@ -677,6 +677,32 @@ by calling `dossier.Dir` — for the same reason the `work/<slug>` fixtures
 do. Mutating the join here fails tests in all four, which is the check that
 they still hold it.
 
+That check could not see a fourth caller, because it never asked:
+`workspacemap.RepoLine` wrote `repos/<name>.md` into every generated
+WORKSPACE-MAP.md row itself, and its tests asserted the string it wrote, so
+the join could be mutated with `internal/workspacemap` still green (issue
+90). It was also the worst of the four to have wrong. The other three open
+or write a file and fail on their first run; this one renders a *link*, into
+a document committed in the instance and read by teammates and agents, where
+a wrong path is a dead link rather than a failure.
+
+What it asks for is not a filesystem path: a markdown link in
+WORKSPACE-MAP.md is resolved relative to the instance root the file sits in,
+which is the one shape `Dir(root)` cannot answer with. So `internal/dossier`
+answers it. `RelPath(repo)` is `repos/<repo>.md`, built from `Dir("")` and
+`Path` so it moves when the join does, with the separator forced to a slash
+because a committed link is read on whatever platform has the instance
+checked out. `Dir` goes on meaning one thing, the caller joins nothing back
+together — the row's leading `./` is about the link, not about where the
+file is — and `workspacemap`'s byte-exact fixtures now fail when the join is
+mutated, the same way the other four sites' do.
+
+The alternative was the sentence instead of the function: the literal kept,
+with a comment naming `dossier.Dir` as what it must agree with, which is
+76's shape and 59's. It lost on the ground 76 won on. There, the paragraph
+bought a decision nothing could hold; here, a small addition to the package
+that already owns both halves buys the check.
+
 ## Where an instance's manifest is
 
 `internal/manifest` owns `repos.yaml` — it always did, apart from where the

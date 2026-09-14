@@ -57,6 +57,42 @@ import "path/filepath"
 // that used to write `filepath.Join(root, "repos")` out by hand — bootstrap,
 // reposync's house-rules sync, and spawn's materialize — still agree, and
 // nobody spells the layout out for a fourth time (issue 72).
+//
+// A fourth caller wants the layout without wanting a file: workspacemap's
+// generated map links a dossier rather than opening one, and asks RelPath
+// below, which is built from this join so that it cannot drift from it
+// (issue 90).
 func Dir(root string) string {
 	return filepath.Join(root, "repos")
+}
+
+// RelPath is a repo's dossier as an instance-relative path —
+// `repos/<repo>.md`, the shape a document committed inside the instance has
+// to link to.
+//
+// It exists because one caller does not want a filesystem path.
+// workspacemap.RepoLine writes a markdown link into WORKSPACE-MAP.md, which
+// is committed in the instance and resolved relative to it by whatever
+// renders the file, so the joined directory Dir answers with is the wrong
+// shape and `Path(Dir(""), repo)` at the call site would be a worse
+// spelling than the literal it replaced. Rather than leave the one caller
+// that could disagree with Dir the one nothing would tell, the question it
+// actually asks is answered here, by the package that owns both halves
+// (issue 90).
+//
+// The answer is built from Dir and Path rather than written out again — the
+// empty root is what leaves Dir's join relative — so a change to that join
+// changes every rendered link with it.
+//
+// The separator is forced to a slash because this answer is read by a
+// renderer and not by a filesystem: a map rendered on Windows must not
+// commit `repos\service-a.md` into a file a teammate on another platform
+// opens, and no markdown renderer resolves a backslash. Dir and Path answer
+// for a filesystem and stay native.
+//
+// It takes no root, and Dir's answer goes on meaning one thing: a caller
+// wanting the file on disk asks Path(Dir(root), repo), as the three
+// filesystem callers do.
+func RelPath(repo string) string {
+	return filepath.ToSlash(Path(Dir(""), repo))
 }

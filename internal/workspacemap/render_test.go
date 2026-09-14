@@ -11,6 +11,15 @@ import (
 // regenerated in place and everything around it, blank lines included, has
 // to come back unchanged. See the package doc, and TestRenderIsIdempotent
 // below.
+//
+// They spell `repos/<name>.md` out rather than building it from
+// dossier.RelPath, the way bootstrap's, reposync's and spawn's fixtures
+// spell the same layout out: a row is what an instance's committed
+// WORKSPACE-MAP.md carries, so a test that asks the code where dossiers are
+// would agree with any answer it gave. Written out, these are what fails
+// when dossier.Dir's join changes without the map's rows changing with it
+// -- the check this package was outside of while RepoLine wrote the layout
+// itself (issue 90).
 
 func TestRenderReplacesExistingRepoBlock(t *testing.T) {
 	existing := "# Workspace Map\n" +

@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/blockadence/gh-archimedes/internal/dossier"
 	"github.com/blockadence/gh-archimedes/internal/manifest"
 )
 
@@ -32,9 +33,20 @@ const (
 )
 
 // RepoLine renders one repo's line in the generated block.
+//
+// The dossier's location comes from internal/dossier, which owns it, rather
+// than being written out here. This row is a link in a file committed to
+// the instance and read by teammates and agents, so a path that disagrees
+// with where dossiers actually are would be a dead link in a checked-in
+// document rather than a run that fails — and writing the layout out here
+// is what kept this package out of the check that holds every other reader
+// of it (issue 90). RelPath answers the shape a markdown link needs: a path
+// relative to the instance root the map sits in. The leading "./" stays
+// here, being about the link and not about where the file is.
 func RepoLine(r manifest.Repo) string {
-	return fmt.Sprintf("- [%s](%s) — base: `%s`. Dossier: [repos/%s.md](./repos/%s.md)",
-		r.Name, r.Path, r.BaseBranch, r.Name, r.Name)
+	rel := dossier.RelPath(r.Name)
+	return fmt.Sprintf("- [%s](%s) — base: `%s`. Dossier: [%s](./%s)",
+		r.Name, r.Path, r.BaseBranch, rel, rel)
 }
 
 // Render returns existing with the block between "## Repos" and
