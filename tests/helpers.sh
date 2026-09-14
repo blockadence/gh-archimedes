@@ -281,6 +281,40 @@ deliverable_interrupt() {
   esac
 }
 
+# The status a run stopped by <signal> is obliged to report, left at
+# $EXPECTED_STATUS.
+#
+# The two literals are the point. The drivers' convention is 128 + the
+# signal's number -- drivers/lib/repo-snapshot.sh arms `interrupted_by INT
+# 130` and `interrupted_by TERM 143`, internal/driver/interrupt.go computes
+# the sum, template/drivers/README.md states the rule -- so a table here
+# that computed it too would be deriving the expected answer the way the
+# code under test derives it, and would agree with a changed convention in
+# silence. 130 and 143 are the assertion rather than a convenience to it:
+# do not "simplify" them into arithmetic.
+#
+# Shared for the reason this file gives elsewhere about readings that can
+# drift apart, which applies harder to an assertion: three copies are three
+# chances for one to be quietly relaxed, and the relaxed one is the file
+# that stops failing. tests/pocock_driver_run.sh,
+# tests/spec_kit_driver_run.sh and tests/interrupted_run.sh each ask this on
+# the line above their announce_interrupt_fallback.
+# tests/fixed_location_conformance.sh sources this file and does not ask:
+# it asserts no exit status on either path, on purpose (issue 67).
+#
+# Assigns rather than echoes, the way start_run_in_background leaves
+# $RUN_PID, so that the branch below reaches the caller's counters: a `fail`
+# inside a command substitution increments a subshell's copy of them and the
+# suite reads green. <signal>
+set_expected_status() {
+  case "$1" in
+    INT)  EXPECTED_STATUS=130 ;;
+    TERM) EXPECTED_STATUS=143 ;;
+    *) fail "set_expected_status: no status written down for SIG$1"
+       return 1 ;;
+  esac
+}
+
 # A copy of the shipped drivers tree at <dest>, with <override-shell-code>
 # appended to its copy of lib/repo-snapshot.sh. Point archimedes at it with
 # ARCHIMEDES_DRIVERS_DIR, or run one of its drivers directly, to see a driver

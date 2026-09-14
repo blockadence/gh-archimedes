@@ -258,10 +258,7 @@ echo "spec-kit driver, interrupted mid-run:"
 # SIGTERM it cannot. deliverable_interrupt has the reasoning, and issue 67
 # the decision to write it down rather than chase it.
 INTERRUPT="$(deliverable_interrupt)"
-case "$INTERRUPT" in
-  INT) expected_status=130 ;;
-  TERM) expected_status=143 ;;
-esac
+set_expected_status "$INTERRUPT"
 announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 for shape in dies traps; do
@@ -318,8 +315,8 @@ for shape in dies traps; do
   # the only positive evidence that the signal landed and was acted on,
   # rather than the run having failed for some unrelated reason of its own
   # -- the marker file above gives `traps` that evidence directly.
-  assert_eq "$killed_status" "$expected_status" \
-    "interrupted mid-run, $shape_label: the driver exits $expected_status, the status of a run stopped by SIG$INTERRUPT"
+  assert_eq "$killed_status" "$EXPECTED_STATUS" \
+    "interrupted mid-run, $shape_label: the driver exits $EXPECTED_STATUS, the status of a run stopped by SIG$INTERRUPT"
   # The session had already written the constitution by this point, so a
   # driver that shrugged the interrupt off would have left it sitting there
   # for the driver runner to harvest -- a context map for a repo nobody
