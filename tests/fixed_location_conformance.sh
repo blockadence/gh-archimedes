@@ -164,6 +164,28 @@ SESSION_HANGING="$WORK/hanging"
 # does CI, which is where "runs on every push" is cashed; a backgrounded run
 # is a person's, and this says which signal it used at the top.
 #
+# Left that way on purpose (issue 67), rather than closed by sharpening this
+# file. What goes unchecked is narrower than the paragraph above may read as:
+# not the pristine-repo promise, but only that the driver *carries* the trap,
+# and with it the 128 + the signal's number and the line it prints on its way
+# out -- the two things an operator and a supervisor read to find out how a
+# run ended. Closing that
+# means telling a driver killed by the signal from one that trapped it and
+# exited 143, and both arrive as 143 today -- internal/driver/interrupt.go's
+# stoppedBy collapses them, deliberately, because a driver killed outright
+# reports no status of its own. Separating them changes what a stopped run
+# reports, which is a contract question owed its own argument rather than
+# one to settle sideways for a sharper test.
+#
+# So this file goes on asserting no exit status on either path: what a driver
+# does about what it finds is its own business, and 128 + the signal's number
+# is an obligation every driver carries rather than one this mode adds. Nor
+# does it ask anything about what a stopped run *said* -- a floor that pinned
+# interrupted_by's sentence would be holding every future driver to it. The
+# one thing it does read out of a run's output is on the success path and is
+# not a wording either: whether the fixed_path is named at all, which is a
+# question with two answers rather than a sentence to match.
+#
 # What does not vary is whether this file can tell that it is looking: the
 # drivers written below to fail it are written to fail it under either
 # signal, so a run that ends green has checked something either way.

@@ -241,6 +241,34 @@ assert_widget_repo_pristine() {
 # ordinary success as proof that an interrupt was handled -- which is
 # exactly what the old case did on any machine where it was backgrounded.
 #
+# For one question, though, the fallback is not equivalent, and this is the
+# place to learn that rather than to find it out. A driver's rollback hangs
+# off its EXIT trap, and its INT/TERM traps are what route an interrupt into
+# that. Under SIGTERM the routing is redundant for the repo: the signal at
+# its default ends the driver's shell, bash runs that shell's EXIT trap on
+# the way out, and the repo comes back whether the driver armed
+# exit_on_interrupt or not. Under SIGINT it is not redundant at all -- a
+# SIGINT arriving while the shell waits on a session that then exits cleanly
+# is dropped, and a driver holding no trap of its own walks on and finishes
+# the run with everything still sitting in the repo.
+#
+# So a case that stops a run and then asks only whether the repo came back
+# can tell a driver that kept its interrupt trap from one that dropped it
+# under SIGINT, and cannot under SIGTERM. That is the shape 51's bug
+# actually took -- exit trap present and correct, interrupt trap missing --
+# so it is not a hypothetical gap. It was weighed and left open on purpose
+# (issue 67): under SIGTERM the pristine-repo promise is kept either way,
+# what goes unchecked is only that the driver *carries* the trap, and
+# run-all.sh and CI both run every file in the foreground, where SIGINT is
+# available. The reader this paragraph is for is the person who backgrounds
+# a file by hand and reads green. The three files this bears on are
+# tests/fixed_location_conformance.sh, tests/pocock_driver_run.sh and
+# tests/spec_kit_driver_run.sh -- each says the same where it picks its
+# signal. tests/interrupted_run.sh stops a run too and is not one of them:
+# it asks whether archimedes forwards a signal at all, against a stub driver
+# that always arms its traps, so nothing there turns on which signal
+# arrives.
+#
 # `trap -- '' SIGINT` is how bash reports a signal it may not touch, which
 # is the whole of what is being asked here. A signal this shell has trapped
 # itself reports its own handler instead and is not confused for one; a

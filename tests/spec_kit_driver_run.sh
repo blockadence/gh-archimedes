@@ -252,6 +252,11 @@ echo "spec-kit driver, interrupted mid-run:"
 # child, and then decides what to do with it from how that child ended, so a
 # session that shuts down cleanly makes the shell drop the operator's
 # interrupt and finish the run.
+#
+# Which signal this gets decides what the `traps` shape below can see: under
+# SIGINT it catches a driver that dropped its interrupt trap, and under
+# SIGTERM it cannot. deliverable_interrupt has the reasoning, and issue 67
+# the decision to write it down rather than chase it.
 INTERRUPT="$(deliverable_interrupt)"
 case "$INTERRUPT" in
   INT) expected_status=130 ;;
