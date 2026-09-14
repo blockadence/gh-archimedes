@@ -9,7 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/blockadence/gh-archimedes/internal/dossier"
 	"github.com/blockadence/gh-archimedes/internal/spawn"
 	"github.com/blockadence/gh-archimedes/internal/stackref"
 	"github.com/blockadence/gh-archimedes/internal/statusfile"
@@ -265,6 +264,13 @@ func TestRunRelativeRootDoesNotNestWorktreeInsideRepo(t *testing.T) {
 // bootstrap happens to produce. A repo checked out *below* the instance
 // root is the case where a mis-resolved relative path is worst: the
 // worktree lands inside the target checkout and shows up in its git status.
+//
+// It is also the layout that puts a checkout and a dossier under one name
+// — `repos/target/` and `repos/target.md` in the same instance — so the
+// dossier is written here too, and its house rules have to arrive in the
+// worktree all the same. That is the arrangement issue 76 decided to keep,
+// run through the subcommand rather than argued; dossier.Dir carries the
+// reason.
 func TestRunResolvesRepoPathsBelowInstanceRoot(t *testing.T) {
 	tmp := t.TempDir()
 	root := filepath.Join(tmp, "instance")
@@ -277,6 +283,9 @@ func TestRunResolvesRepoPathsBelowInstanceRoot(t *testing.T) {
 	}
 	mustWriteFile(t, filepath.Join(root, "repos.yaml"),
 		"repos:\n  - name: target\n    path: repos/target\n    base_branch: main\n")
+
+	rules := "Never rebase a shared branch."
+	writeDossier(t, root, "target", rules)
 
 	slug := "widget-fix"
 	workSlugDir := filepath.Join(root, "work", slug)
@@ -293,6 +302,10 @@ func TestRunResolvesRepoPathsBelowInstanceRoot(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(wt, spawn.ContextDirName, "ticket.md")); err != nil {
 		t.Errorf("ticket.md was not materialized into the real worktree: %v", err)
 	}
+	// The dossier sitting beside the checkout under the same name is still
+	// read as the dossier -- `repos/target.md` delivered, `repos/target/`
+	// left as the checkout spawn just worked in.
+	assertHouseRules(t, wt, rules)
 }
 
 // Spawning delivers the target repo's house rules even when the slug has
@@ -301,9 +314,7 @@ func TestRunDeliversHouseRules(t *testing.T) {
 	inst := newInstance(t)
 
 	rules := "Never rebase a shared branch.\nAll schema changes go through the migration tool, no exceptions."
-	mustMkdirAll(t, filepath.Join(inst.root, "repos"))
-	mustWriteFile(t, filepath.Join(inst.root, "repos", "target.md"),
-		"# target\n\n## House rules\n\n"+rules+"\n\n## Known gotchas\nn/a\n")
+	writeDossier(t, inst.root, "target", rules)
 
 	slug := "quiet-fix"
 	inst.workSlug(t, slug)
@@ -311,13 +322,7 @@ func TestRunDeliversHouseRules(t *testing.T) {
 	run(t, spawn.Options{Root: inst.root, Slug: slug, Repo: "target"})
 
 	wt := worktree.Path(inst.target.Clone, slug)
-	got, err := os.ReadFile(filepath.Join(wt, spawn.ContextDirName, dossier.HouseRulesFileName))
-	if err != nil {
-		t.Fatalf("%s was not delivered: %v", dossier.HouseRulesFileName, err)
-	}
-	if string(got) != rules+"\n" {
-		t.Errorf("house rules diverged from the dossier\n got: %q\nwant: %q", got, rules+"\n")
-	}
+	assertHouseRules(t, wt, rules)
 	if status := testrepo.GitOut(t, wt, "status", "--porcelain"); status != "" {
 		t.Errorf("the ephemeral house-rules copy surfaced in git status: %q", status)
 	}
