@@ -85,3 +85,22 @@ func TestADossierAndACheckoutShareANameWithoutSharingAPath(t *testing.T) {
 		t.Errorf("%q is no longer a directory -- the dossier landed on the checkout", checkout)
 	}
 }
+
+// The layout spelled out rather than built from the code under test, for
+// the same reason TestDirIsTheReposDirectoryUnderTheInstanceRoot does it:
+// this is the answer a committed document links to, so the test that holds
+// it has to state the answer itself.
+func TestRelPathIsTheDossierRelativeToTheInstanceRoot(t *testing.T) {
+	if got := dossier.RelPath("service-a"); got != "repos/service-a.md" {
+		t.Errorf("got %q, want %q", got, "repos/service-a.md")
+	}
+}
+
+// RelPath answers a document, not a filesystem: a link in a committed
+// WORKSPACE-MAP.md is read on whatever machine has the instance checked
+// out, so the separator cannot be the one the renderer happens to run on.
+func TestRelPathIsSlashSeparatedOnEveryPlatform(t *testing.T) {
+	if got := dossier.RelPath("service-a"); strings.ContainsRune(got, '\\') {
+		t.Errorf("got %q, which no markdown renderer resolves", got)
+	}
+}
