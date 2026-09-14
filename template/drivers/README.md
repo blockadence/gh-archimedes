@@ -387,7 +387,7 @@ anything it started. Archimedes then goes back to waiting: it does not exit
 until the driver has, so whatever the driver writes on its way out reaches
 the operator.
 
-Two things follow for a driver you write:
+Three things follow for a driver you write:
 
 - **You are the only thing that can put the target repo back.** The signal
   is delivered so that your cleanup gets to run, and Archimedes waits so
@@ -425,6 +425,44 @@ What no arrangement here can cover is `SIGKILL`, which can neither be
 forwarded nor trapped: a driver killed that way leaves the target repo
 exactly as its session left it. `lib/repo-snapshot.sh` names that window and
 the others beside it.
+
+### Interrupt traps under `SIGINT` and `SIGTERM`
+
+Worth being exact about, because your two terminating signals do not reach
+your shell alike, and only one of them makes `exit_on_interrupt` load-bearing
+for the repo.
+
+A `SIGINT` that arrives while your shell is waiting on a session is
+*dropped* when that session ends any way other than killed by it. A
+well-behaved CLI that catches the Ctrl-C and shuts down cleanly is exactly
+that case: bash reads the child's tidy exit as "the interrupt was handled"
+and discards the copy it was holding for you — unless you hold a trap of
+your own to be run instead. Without one your run walks straight past the
+operator's Ctrl-C, finishes, keeps its `fixed_path` and hands back a repo
+full of whatever the session unpacked.
+
+A `SIGTERM` at its default *ends* the shell, and bash runs your `EXIT` trap
+on the way out. So if your rollback hangs off `EXIT` and was armed before
+anything wrote to the repo — the ordering the bullet above asks for — the
+repo comes back under `SIGTERM` whether you armed the interrupt or not. For
+the repo, and under that signal alone, the interrupt trap buys you nothing.
+
+Arm it anyway, because the repo is not the only thing a stopped run owes.
+What the trap still carries is how the run *reports itself*: the exit status
+the bullet above asks of you, and the line `lib/repo-snapshot.sh` prints on
+its way out saying it is rolling the repo back and keeping nothing. Those are
+the two things an operator at a terminal and a supervisor reading an exit
+status actually have to go on, and a driver that skipped the trap leaves both
+to be inferred from a shell that simply died. Note also that the status alone
+cannot tell you which happened: a driver killed by `SIGTERM` reports no
+status of its own, so Archimedes uses the convention's 143 — the same 143 a
+driver that trapped it and exited deliberately reports.
+
+One consequence for anyone testing a driver of their own: a check that stops
+a run and then asks only whether the repo came back cannot tell a driver
+that armed the interrupt from one that did not, if the signal it had to hand
+was `SIGTERM`. Under `SIGINT` it can. The conformance check above is in
+exactly that position, and says so where it picks its signal.
 
 ## Trying one directly
 

@@ -164,11 +164,33 @@ SESSION_HANGING="$WORK/hanging"
 # does CI, which is where "runs on every push" is cashed; a backgrounded run
 # is a person's, and this says which signal it used at the top.
 #
+# Left that way on purpose (issue 67), rather than closed by sharpening this
+# file. What goes unchecked is narrower than the paragraph above may read as:
+# not the pristine-repo promise, but only that the driver *carries* the trap,
+# and with it the 128 + the signal's number and the line it prints on its way
+# out -- the two things an operator and a supervisor read to find out how a
+# run ended. Closing that
+# means telling a driver killed by the signal from one that trapped it and
+# exited 143, and both arrive as 143 today -- internal/driver/interrupt.go's
+# stoppedBy collapses them, deliberately, because a driver killed outright
+# reports no status of its own. Separating them changes what a stopped run
+# reports, which is a contract question owed its own argument rather than
+# one to settle sideways for a sharper test.
+#
+# So this file goes on asserting no exit status on either path: what a driver
+# does about what it finds is its own business, and 128 + the signal's number
+# is an obligation every driver carries rather than one this mode adds. Nor
+# does it ask anything about what a stopped run *said* -- a floor that pinned
+# interrupted_by's sentence would be holding every future driver to it. The
+# one thing it does read out of a run's output is on the success path and is
+# not a wording either: whether the fixed_path is named at all, which is a
+# question with two answers rather than a sentence to match.
+#
 # What does not vary is whether this file can tell that it is looking: the
 # drivers written below to fail it are written to fail it under either
 # signal, so a run that ends green has checked something either way.
 INTERRUPT="$(deliverable_interrupt)"
-[ "$INTERRUPT" = "INT" ] || echo "  (SIGINT is ignored in this shell and cannot be restored; stopping runs with SIG$INTERRUPT)"
+announce_interrupt_fallback "$INTERRUPT" "stopping runs with"
 
 # What the stub session writes besides the driver's fixed_path. Named here
 # rather than inside the stub because the assertions below have to ask
@@ -411,19 +433,16 @@ STUB
 # by which of several flags were left empty: they do not compose, and an
 # empty string standing in for one of them reads like a mistake.
 #
-# Started in the background, always. Not because either case wants it that
-# way -- the one that lets a run finish just waits for it on the next line
-# -- but because the one that stops a run needs a pid to aim at, and both
-# have to be started identically or the thing being stopped is not the thing
-# that was checked. `set -m` comes with that: a command bash starts
-# asynchronously without job control has SIGINT set to SIG_IGN, a
-# disposition inherited through every fork and exec beneath it and
-# restorable by none of them, so a run started without it could not be
-# interrupted at all. The process group `set -m` also hands out is
-# incidental here -- archimedes puts the driver in one of its own and
-# forwards to that.
+# Started in the background, always, through start_run_in_background --
+# which is where the reasons for both halves of that now live. Not because
+# either case wants it that way -- the one that lets a run finish just waits
+# for it on the next line -- but because the one that stops a run needs a pid
+# to aim at, and both have to be started identically or the thing being
+# stopped is not the thing that was checked. The process group that helper
+# also hands out is incidental here -- archimedes puts the driver in one of
+# its own and forwards to that.
 #
-# Leaves the run at $ARCHIMEDES_PID, the repo at $REPO and the session's
+# Leaves the run at $RUN_PID, the repo at $REPO and the session's
 # account of itself at $SESSION_LOG for the caller to judge -- what counts
 # as a pass differs between the drivers this holds to the contract and the
 # deliberately broken ones that prove it can tell.
@@ -543,18 +562,15 @@ start_run() { # <drivers-dir> <driver-name> <shape>
   # ARCHIMEDES_DRIVERS_DIR rather than the copy inside the binary, so the
   # drivers this runs are the same files the discovery above read. Which
   # layer supplies a driver is tests/driver_ownership.sh's question.
-  set -m
-  PATH="$STUB_BIN:$PATH" \
-  ARCHIMEDES_DRIVERS_DIR="$dir" \
-  CONFORMANCE_REPO="$REPO" \
-  CONFORMANCE_FIXED_PATH="$fixed" \
-  CONFORMANCE_LOG="$SESSION_LOG" \
-  CONFORMANCE_SESSION_SHAPE="$session" \
-  CONFORMANCE_HANG_SENTINEL="$SESSION_HANGING" \
-    "$ARCHIMEDES_BIN" run-driver "$name" "$REPO" "$WORK/harvested.md" \
-    >"$WORK/run.log" 2>&1 &
-  ARCHIMEDES_PID=$!
-  set +m
+  start_run_in_background "$WORK/run.log" \
+    env PATH="$STUB_BIN:$PATH" \
+    ARCHIMEDES_DRIVERS_DIR="$dir" \
+    CONFORMANCE_REPO="$REPO" \
+    CONFORMANCE_FIXED_PATH="$fixed" \
+    CONFORMANCE_LOG="$SESSION_LOG" \
+    CONFORMANCE_SESSION_SHAPE="$session" \
+    CONFORMANCE_HANG_SENTINEL="$SESSION_HANGING" \
+    "$ARCHIMEDES_BIN" run-driver "$name" "$REPO" "$WORK/harvested.md"
   return 0
 }
 
@@ -570,7 +586,7 @@ start_run() { # <drivers-dir> <driver-name> <shape>
 # <drivers-dir> <driver-name>
 run_with_misbehaving_session() {
   start_run "$1" "$2" misbehaving-session || return 1
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  wait "$RUN_PID" 2>/dev/null
   return 0
 }
 
@@ -578,7 +594,7 @@ run_with_misbehaving_session() {
 # committed, at a path the suite chose. <drivers-dir> <driver-name>
 run_over_prior_work() {
   start_run "$1" "$2" over-prior-work || return 1
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  wait "$RUN_PID" 2>/dev/null
   return 0
 }
 
@@ -594,7 +610,7 @@ run_over_prior_work() {
 # <drivers-dir> <driver-name>
 run_over_work_at_the_fixed_path() {
   start_run "$1" "$2" over-the-fixed-path || return 1
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  wait "$RUN_PID" 2>/dev/null
   return 0
 }
 
@@ -606,14 +622,14 @@ run_over_work_at_the_fixed_path() {
 # on a success path. <drivers-dir> <driver-name>
 run_with_nothing_at_the_fixed_path() {
   start_run "$1" "$2" nothing-at-the-fixed-path || return 1
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  wait "$RUN_PID" 2>/dev/null
   return 0
 }
 
 # <drivers-dir> <driver-name>
 run_over_a_deleted_fixed_path() {
   start_run "$1" "$2" deletion-at-the-fixed-path || return 1
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  wait "$RUN_PID" 2>/dev/null
   return 0
 }
 
@@ -633,24 +649,20 @@ run_over_a_deleted_fixed_path() {
 # pristine repo and would pass for the wrong reason.
 # <drivers-dir> <driver-name>
 stop_the_run_halfway() {
-  local waited=0
   start_run "$1" "$2" stopped-mid-session || return 1
 
   # The same minute the stub's own backstop allows, and for the same reason
   # -- reaching either is a broken test rather than a slow machine -- but
-  # they are independent bounds: this one waits for a session to start, and
-  # that one waits, once it has, for a signal.
-  until [ -f "$SESSION_HANGING" ] || [ "$waited" -ge 600 ]; do
-    sleep 0.1; waited=$((waited + 1))
-  done
-  if [ ! -f "$SESSION_HANGING" ]; then
-    kill -KILL "$ARCHIMEDES_PID" 2>/dev/null
-    wait "$ARCHIMEDES_PID" 2>/dev/null
+  # they are independent bounds, written out separately here and there: this
+  # one waits for a session to start, and that one waits, once it has, for a
+  # signal.
+  if ! wait_until_under_way "$SESSION_HANGING" 600; then
+    abandon_run process
     return 2
   fi
 
-  kill -"$INTERRUPT" "$ARCHIMEDES_PID" 2>/dev/null
-  wait "$ARCHIMEDES_PID" 2>/dev/null
+  kill -"$INTERRUPT" "$RUN_PID" 2>/dev/null
+  wait "$RUN_PID" 2>/dev/null
   return 0
 }
 

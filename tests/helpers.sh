@@ -241,6 +241,34 @@ assert_widget_repo_pristine() {
 # ordinary success as proof that an interrupt was handled -- which is
 # exactly what the old case did on any machine where it was backgrounded.
 #
+# For one question, though, the fallback is not equivalent, and this is the
+# place to learn that rather than to find it out. A driver's rollback hangs
+# off its EXIT trap, and its INT/TERM traps are what route an interrupt into
+# that. Under SIGTERM the routing is redundant for the repo: the signal at
+# its default ends the driver's shell, bash runs that shell's EXIT trap on
+# the way out, and the repo comes back whether the driver armed
+# exit_on_interrupt or not. Under SIGINT it is not redundant at all -- a
+# SIGINT arriving while the shell waits on a session that then exits cleanly
+# is dropped, and a driver holding no trap of its own walks on and finishes
+# the run with everything still sitting in the repo.
+#
+# So a case that stops a run and then asks only whether the repo came back
+# can tell a driver that kept its interrupt trap from one that dropped it
+# under SIGINT, and cannot under SIGTERM. That is the shape 51's bug
+# actually took -- exit trap present and correct, interrupt trap missing --
+# so it is not a hypothetical gap. It was weighed and left open on purpose
+# (issue 67): under SIGTERM the pristine-repo promise is kept either way,
+# what goes unchecked is only that the driver *carries* the trap, and
+# run-all.sh and CI both run every file in the foreground, where SIGINT is
+# available. The reader this paragraph is for is the person who backgrounds
+# a file by hand and reads green. The three files this bears on are
+# tests/fixed_location_conformance.sh, tests/pocock_driver_run.sh and
+# tests/spec_kit_driver_run.sh -- each says the same where it picks its
+# signal. tests/interrupted_run.sh stops a run too and is not one of them:
+# it asks whether archimedes forwards a signal at all, against a stub driver
+# that always arms its traps, so nothing there turns on which signal
+# arrives.
+#
 # `trap -- '' SIGINT` is how bash reports a signal it may not touch, which
 # is the whole of what is being asked here. A signal this shell has trapped
 # itself reports its own handler instead and is not confused for one; a
@@ -305,4 +333,138 @@ skip_without_driver_bash_4() {
   [ "${major:-0}" -ge 4 ] && return 0
   echo "skip: $1 ($2, and the bash a driver would run under here is $(env bash -c 'echo "$BASH_VERSION"' 2>/dev/null))"
   exit 77
+}
+
+# --- Starting a run and catching it in the middle --------------------------
+#
+# Four files stop a run partway through and all four have to get to the same
+# place first: a run that is really under way, with a pid to aim at. Shared
+# rather than copied into each, because every piece of the sequence encodes a
+# reason that is not visible in the code carrying it, and four copies is four
+# chances for one of them to lose a piece -- on the path nobody watches.
+#
+# What is deliberately not shared is what the four files disagree about on
+# purpose: who gets signalled (see abandon_run), how long to wait, and what
+# announces that the run is under way (see wait_until_under_way). Those are
+# the questions the files ask, and a helper that answered them here would
+# delete the distinctions they exist to draw.
+
+# Start <cmd...> in the background with its output at <log-file>, leaving its
+# pid at $RUN_PID.
+#
+# $RUN_PID is this section's one piece of shared state, and it does not exist
+# until a run has been started. Everything below that reads it -- and every
+# `wait` at a call site -- is only meaningful after this has been called for
+# the run being asked about. Under the `set -u` this file runs with, reading
+# it before then ends the whole test file rather than failing one assertion,
+# which is the right way round: a case that waits on a run nobody started is
+# not a case with a wrong answer.
+#
+# `set -m` is here for the signal disposition and not for the process group:
+# a command bash starts asynchronously without job control has SIGINT set to
+# SIG_IGN, a disposition inherited through every fork and exec beneath it and
+# restorable by none of them -- deliverable_interrupt above says why at
+# length -- so a run started without it could not be interrupted at all. The
+# process group it also hands out is what two of the callers want and is
+# incidental to the other two, which aim at a pid.
+#
+# <cmd...> is a plain argv, so the environment a run needs goes through `env`
+# rather than assignments in front of a command word. That costs nothing that
+# matters here: `env` execs what it was handed, so the pid is still the pid of
+# the thing that was started, and its process group is still that thing's.
+#
+# Backgrounded even for a caller that means to wait for the run on the very
+# next line: a run that is going to be stopped needs a pid to aim at, and one
+# that is not has to be started identically, or the thing being stopped is not
+# the thing that was checked.
+start_run_in_background() { # <log-file> <cmd...>
+  local log="$1"
+  shift
+  set -m
+  "$@" >"$log" 2>&1 &
+  RUN_PID=$!
+  set +m
+}
+
+# Wait until <sentinel> says that run is really under way, up to <bound>
+# tenths of a second. 0 once the sentinel is there, 1 if the bound was
+# reached first.
+#
+# What makes a sentinel worth waiting for is when the run announces it: only
+# once the run has really written into the repo, so that a test signalling on
+# it is signalling a run there is something to undo.
+#
+# The sentinel is the caller's to name and the caller's to clear, and this
+# owns no path of its own, because a path shared between runs is a path an
+# abandoned run can still write to: tests/fixed_location_conformance.sh names
+# its per driver precisely so a stub left waiting out its own backstop cannot
+# drop a marker onto the next driver's verdict.
+#
+# The bound is the caller's for a related reason. 300 in the per-driver files
+# and 600 in the two that go through archimedes are two answers to one
+# question, and where the stub being waited for has a backstop of its own that
+# is a third number again -- this one bounds the wait for a session to start,
+# that one bounds the started session's wait for a signal. They may well be
+# the same number; they are not the same bound, and joining them here would
+# make them one.
+wait_until_under_way() { # <sentinel> <bound>
+  local waited=0
+  until [ -f "$1" ] || [ "$waited" -ge "$2" ]; do
+    sleep 0.1; waited=$((waited + 1))
+  done
+  [ -f "$1" ]
+}
+
+# Stop the run at $RUN_PID for good and reap it. This is for the one outcome
+# no caller can carry on from -- a run that never got under way -- so every
+# caller says so and gives up; SIGKILL is what stops an abandoned run still
+# writing into a fixture the next case is about to use.
+#
+# <reach> is the question the four files answer differently, and it is not a
+# detail of the bail-out: it is the same choice the interrupt itself makes a
+# few lines later at the call site. The two are spelled separately, and
+# nothing here can hold them together -- so they have to be read together.
+# A reach that stopped matching the `kill` below it would abandon a run one
+# way and interrupt it another, and since both spellings reach a live
+# process, neither would complain.
+#
+#   process-group  the two per-driver files, which start a driver themselves
+#                  and signal it and its session together, the way a terminal
+#                  signals its foreground process group.
+#   process        tests/interrupted_run.sh and
+#                  tests/fixed_location_conformance.sh, which start
+#                  `archimedes` and aim at its pid alone, so that a driver
+#                  hearing about the signal heard it from archimedes. A group
+#                  signal there would hand the driver a copy the test itself
+#                  arranged, and those files would be checking a path no
+#                  operator takes.
+abandon_run() { # <reach>
+  case "$1" in
+    process-group) kill -KILL -"$RUN_PID" 2>/dev/null ;;
+    process)       kill -KILL "$RUN_PID" 2>/dev/null ;;
+    # Recorded as a failure, the way start_run records a shape nothing
+    # writes, and short of the `wait` below: a reach nothing here recognises
+    # has killed nothing, so waiting on a run that is still going would hang
+    # where a miscall should be a red suite.
+    *) fail "abandon_run: asked for a reach that is neither a process nor its group: $1"
+       return 1 ;;
+  esac
+  wait "$RUN_PID" 2>/dev/null
+}
+
+# The notice that goes with deliverable_interrupt having come back with the
+# fallback: what the run below is about to be stopped with is not what this
+# file says everywhere else, and someone reading the output should not have to
+# work that out. Silent when SIGINT is deliverable, which is the ordinary case
+# and needs no announcing.
+#
+# <what-this-file-does-with-it> is the caller's own words, and they differ on
+# purpose: three files stop one run at a time and say "interrupting with",
+# while tests/fixed_location_conformance.sh stops a run per driver and says
+# "stopping runs with". One notice, and the sentence each file was written to
+# finish. <signal> <what-this-file-does-with-it>
+announce_interrupt_fallback() {
+  if [ "$1" != "INT" ]; then
+    echo "  (SIGINT is ignored in this shell and cannot be restored; $2 SIG$1)"
+  fi
 }
