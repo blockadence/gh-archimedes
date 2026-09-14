@@ -672,10 +672,12 @@ a name that could not be confused with a checkout would be a migration, not
 a rename.
 
 The fixtures that spell the layout out still spell it out — `repos/<name>.md`
-written literally in `bootstrap`, `reposync`, `spawn` and `cmd`, never built
-by calling `dossier.Dir` — for the same reason the `work/<slug>` fixtures
-do. Mutating the join here fails tests in all four, which is the check that
-they still hold it.
+written literally in `bootstrap`, `reposync`, `spawn`, `cmd` and
+`workspacemap`, never built by calling `dossier.Dir` — for the same reason
+the `work/<slug>` fixtures do. Mutating the join here fails tests in all
+five, which is the check that they still hold it. `workspacemap` is the
+fifth as of issue 90, below; it spelled the layout out in production too,
+which is what kept its fixtures from being a check on anything.
 
 That check could not see a fourth caller, because it never asked:
 `workspacemap.RepoLine` wrote `repos/<name>.md` into every generated
@@ -694,8 +696,9 @@ answers it. `RelPath(repo)` is `repos/<repo>.md`, built from `Dir("")` and
 because a committed link is read on whatever platform has the instance
 checked out. `Dir` goes on meaning one thing, the caller joins nothing back
 together — the row's leading `./` is about the link, not about where the
-file is — and `workspacemap`'s byte-exact fixtures now fail when the join is
-mutated, the same way the other four sites' do.
+file is. The map's byte-exact rows were already written literally; routing
+the producer through `RelPath` is what turned them into the check the other
+four sites' fixtures have been.
 
 The alternative was the sentence instead of the function: the literal kept,
 with a comment naming `dossier.Dir` as what it must agree with, which is
