@@ -45,7 +45,7 @@ make_widget_repo "$REPO"
 echo "spec-kit driver end-to-end:"
 
 OUT="$WORK/CONTEXT.md"
-if "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
+if "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
   pass "driver run exits zero against a throwaway repo"
 else
   fail "driver run exits zero against a throwaway repo"

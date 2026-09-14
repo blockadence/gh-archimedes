@@ -76,6 +76,18 @@ make_origin_and_clone() {
 # is current.
 ARCHIMEDES_BIN="$TESTS_REPO_ROOT/archimedes"
 
+# Every `run-driver` in this suite passes `--root "$WORK"`, and it is worth
+# saying once why rather than in eleven places. --root names the instance:
+# the drivers/ searched before the ones the binary ships -- none of these
+# tests has one, so every driver still resolves out of the binary -- and,
+# since a run is noted down while it is under way, where .archimedes-runs/
+# goes. Left at its default that is the checkout the suite runs from, so a
+# case that deliberately leaves a repo nothing can roll back (a session that
+# commits) would drop a record into this repository and nothing would ever
+# take it back. Pointed at the test's own work directory, the record goes
+# when the work directory does -- and the case still exercises exactly what
+# an operator gets, since an operator's --root is their instance.
+
 build_archimedes() {
   ( cd "$TESTS_REPO_ROOT" && go build -o archimedes ./cmd/archimedes ) || {
     echo "could not build the archimedes CLI" >&2
@@ -278,6 +290,40 @@ deliverable_interrupt() {
   case "$(trap -p INT)" in
     "trap -- '' SIGINT"*) echo TERM ;;
     *) echo INT ;;
+  esac
+}
+
+# The status a run stopped by <signal> is obliged to report, left at
+# $EXPECTED_STATUS.
+#
+# The two literals are the point. The drivers' convention is 128 + the
+# signal's number -- drivers/lib/repo-snapshot.sh arms `interrupted_by INT
+# 130` and `interrupted_by TERM 143`, internal/driver/interrupt.go computes
+# the sum, template/drivers/README.md states the rule -- so a table here
+# that computed it too would be deriving the expected answer the way the
+# code under test derives it, and would agree with a changed convention in
+# silence. 130 and 143 are the assertion rather than a convenience to it:
+# do not "simplify" them into arithmetic.
+#
+# Shared for the reason this file gives elsewhere about readings that can
+# drift apart, which applies harder to an assertion: three copies are three
+# chances for one to be quietly relaxed, and the relaxed one is the file
+# that stops failing. tests/pocock_driver_run.sh,
+# tests/spec_kit_driver_run.sh and tests/interrupted_run.sh each ask this on
+# the line above their announce_interrupt_fallback.
+# tests/fixed_location_conformance.sh sources this file and does not ask:
+# it asserts no exit status on either path, on purpose (issue 67).
+#
+# Assigns rather than echoes, the way start_run_in_background leaves
+# $RUN_PID, so that the branch below reaches the caller's counters: a `fail`
+# inside a command substitution increments a subshell's copy of them and the
+# suite reads green. <signal>
+set_expected_status() {
+  case "$1" in
+    INT)  EXPECTED_STATUS=130 ;;
+    TERM) EXPECTED_STATUS=143 ;;
+    *) fail "set_expected_status: no status written down for SIG$1"
+       return 1 ;;
   esac
 }
 

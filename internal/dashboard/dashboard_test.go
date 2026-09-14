@@ -195,9 +195,9 @@ func TestRenderFlagsAStackedBranchWhoseBaseHasMerged(t *testing.T) {
 	// The sentence status owns — "service-b:widget (stacked on
 	// service-a:auth) — rebase onto origin/main", note and all — rather
 	// than a differently-shaped line for the same condition. Asked of the
-	// row rather than spelled out here, so a renderer that goes back to
+	// report rather than spelled out here, so a renderer that goes back to
 	// formatting its own fails this even if the wording later changes.
-	want := snap.Report.Rows[0].RebaseLine()
+	want := snap.Report.RebaseNeeded()[0].Line()
 	if !strings.Contains(got, "Rebase needed") || !strings.Contains(got, want) {
 		t.Errorf("expected the rebase list the CLI prints, %q:\n%s", want, got)
 	}

@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/blockadence/gh-archimedes/internal/runrecord"
 )
 
 // Output modes a driver can declare. Anything else is a misconfiguration.
@@ -123,10 +125,30 @@ func commandPath(driversDir, name string, m Manifest) string {
 	return filepath.Join(driversDir, name, filepath.FromSlash(m.Command))
 }
 
+// job is one driver run, as the thing invoking it needs to see it. A struct
+// rather than a growing argument list: what a run takes is now five things,
+// and the fifth — where the driver is asked to leave its snapshot — is the
+// one a reader would otherwise have to count commas to identify.
+type job struct {
+	// bin is the driver's command.
+	bin string
+	// repoPath is the target repo, absolute.
+	repoPath string
+	// outputPath is where the finished context map has to end up.
+	outputPath string
+	// snapshotPath is where the driver is asked to leave the snapshot it
+	// takes, so that something outside its process holds one if it dies
+	// before putting the repo back (see backstop.go). Empty where no
+	// record is being kept, which the driver reads as "keep your own".
+	snapshotPath string
+	// progress is where the driver's own two streams go.
+	progress io.Writer
+}
+
 // invocation is how one output_mode gets a driver's output to outputPath.
 // Picking one up front (see Manifest.plan) is what keeps the output_mode
 // decision in a single place rather than re-tested at every step.
-type invocation func(bin, repoPath, outputPath string, progress io.Writer) error
+type invocation func(j job) error
 
 // plan validates a manifest and returns how to invoke it. Everything a
 // mode requires beyond the mode itself — fixed-location's fixed_path — is
@@ -157,7 +179,7 @@ func (m Manifest) plan(name string) (invocation, error) {
 // output_mode we don't support, a command that isn't executable, a non-zero
 // exit, and — the one a driver can't self-report — a zero exit that never
 // produced the file it promised.
-func runIn(driversDir, name, repoPath, outputPath string, progress io.Writer) error {
+func runIn(driversDir, name, repoPath, outputPath string, records runrecord.Dir, progress io.Writer) error {
 	m, err := readManifest(os.DirFS(driversDir), driversDir, name)
 	if err != nil {
 		return err
@@ -184,7 +206,22 @@ func runIn(driversDir, name, repoPath, outputPath string, progress io.Writer) er
 		return err
 	}
 
-	if err := invoke(bin, repoPath, outputPath, progress); err != nil {
+	// Opened before the driver is started and not after, because the
+	// window this closes is the one where the driver dies without warning:
+	// a record written afterwards is a record for every run except the
+	// ones that needed one.
+	rec := openRecord(records, name, repoPath, progress)
+	j := job{bin: bin, repoPath: repoPath, outputPath: outputPath, progress: progress}
+	if rec != nil {
+		j.snapshotPath = rec.SnapshotPath()
+	}
+
+	err = invoke(j)
+	// Whatever the run did, the repo it was working in is answered for
+	// before this returns: on the way out of a failed run there is nobody
+	// else left to do it.
+	settle(rec, driversDir, err, progress)
+	if err != nil {
 		return fmt.Errorf("driver %q: %w", name, err)
 	}
 	return nil
@@ -192,12 +229,12 @@ func runIn(driversDir, name, repoPath, outputPath string, progress io.Writer) er
 
 // writeWhereTold is the path-parameterized contract: the driver is handed
 // the output location and writes exactly there.
-func writeWhereTold(bin, repoPath, outputPath string, progress io.Writer) error {
-	if err := run(bin, progress, repoPath, outputPath); err != nil {
+func writeWhereTold(j job) error {
+	if err := run(j, j.repoPath, j.outputPath); err != nil {
 		return err
 	}
-	if !isFile(outputPath) {
-		return fmt.Errorf("exited 0 but did not write %s", outputPath)
+	if !isFile(j.outputPath) {
+		return fmt.Errorf("exited 0 but did not write %s", j.outputPath)
 	}
 	return nil
 }
@@ -207,18 +244,18 @@ func writeWhereTold(bin, repoPath, outputPath string, progress io.Writer) error 
 // its manifest-declared fixedPath ourselves — moving rather than copying,
 // so the target repo ends up with no trace of the artifact.
 func harvestFrom(fixedPath string) invocation {
-	return func(bin, repoPath, outputPath string, progress io.Writer) error {
-		writtenAt := filepath.Join(repoPath, fixedPath)
-		if err := run(bin, progress, repoPath); err != nil {
+	return func(j job) error {
+		writtenAt := filepath.Join(j.repoPath, fixedPath)
+		if err := run(j, j.repoPath); err != nil {
 			return err
 		}
 		if !isFile(writtenAt) {
 			return fmt.Errorf("exited 0 but did not write %s", writtenAt)
 		}
-		if err := move(writtenAt, outputPath); err != nil {
+		if err := move(writtenAt, j.outputPath); err != nil {
 			return err
 		}
-		pruneEmptied(repoPath, fixedPath)
+		pruneEmptied(j.repoPath, fixedPath)
 		return nil
 	}
 }
@@ -254,12 +291,21 @@ func pruneEmptied(repoPath, fixedPath string) {
 // in between: a driver is put in a process group of its own and handed the
 // interrupts archimedes receives, and archimedes then keeps waiting for the
 // rollback that follows. See interrupt.go for the whole of that.
-func run(bin string, progress io.Writer, args ...string) error {
-	out := &serialized{w: progress}
+func run(j job, args ...string) error {
+	out := &serialized{w: j.progress}
 
-	cmd := exec.Command(bin, args...)
+	cmd := exec.Command(j.bin, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
+	// Where to leave the snapshot, for a driver that takes one. Added to
+	// the environment rather than passed as an argument because it is not
+	// part of either invocation contract: a driver that reads it gets a
+	// backstop, one that does not is unaffected, and neither the argument
+	// list nor the output_mode has to grow a case for the difference.
+	cmd.Env = os.Environ()
+	if j.snapshotPath != "" {
+		cmd.Env = append(cmd.Env, runrecord.SnapshotEnvVar+"="+j.snapshotPath)
+	}
 	isolateProcessGroup(cmd)
 
 	relay := watchForInterrupts(out)
@@ -267,7 +313,7 @@ func run(bin string, progress io.Writer, args ...string) error {
 		if sig, ok := relay.release(); ok {
 			return stoppedBy(sig, nil)
 		}
-		return fmt.Errorf("%s: %w", bin, err)
+		return fmt.Errorf("%s: %w", j.bin, err)
 	}
 	relay.forwardTo(cmd.Process.Pid)
 	waitErr := cmd.Wait()
@@ -280,7 +326,7 @@ func run(bin string, progress io.Writer, args ...string) error {
 		return stoppedBy(sig, cmd.ProcessState)
 	}
 	if waitErr != nil {
-		return fmt.Errorf("%s: %w", bin, waitErr)
+		return fmt.Errorf("%s: %w", j.bin, waitErr)
 	}
 	return nil
 }

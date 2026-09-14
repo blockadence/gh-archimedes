@@ -153,7 +153,7 @@ echo "pocock driver, successful run:"
 
 fresh_repo "$REPO"
 OUT="$WORK/CONTEXT.md"
-if "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
+if "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
   pass "a run whose session writes CONTEXT.md exits zero"
 else
   fail "a run whose session writes CONTEXT.md exits zero"
@@ -190,7 +190,7 @@ echo "pocock driver, the session writes nothing:"
 
 fresh_repo "$REPO"
 OUT="$WORK/noop.md"
-if err="$(CLAUDE_STUB_MODE=noop "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(CLAUDE_STUB_MODE=noop "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose session wrote no CONTEXT.md exits non-zero"
 else
   pass "a run whose session wrote no CONTEXT.md exits non-zero"
@@ -205,7 +205,7 @@ echo "pocock driver, the session fails:"
 
 fresh_repo "$REPO"
 OUT="$WORK/fail.md"
-if CLAUDE_STUB_MODE=fail "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" >/dev/null 2>&1; then
+if CLAUDE_STUB_MODE=fail "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" >/dev/null 2>&1; then
   fail "a run whose session exits non-zero fails the driver too"
 else
   pass "a run whose session exits non-zero fails the driver too"
@@ -223,7 +223,7 @@ echo "pocock driver, the session writes more than the map:"
 # sometimes lose. Losing must not look like winning.
 fresh_repo "$REPO"
 OUT="$WORK/extra.md"
-if err="$(CLAUDE_STUB_MODE=extra "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(CLAUDE_STUB_MODE=extra "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose session wrote more than the map exits non-zero"
 else
   pass "a run whose session wrote more than the map exits non-zero"
@@ -251,7 +251,7 @@ echo "notes to self" > "$REPO/scratch-note.md"
 echo "// mine, uncommitted" >> "$REPO/src/index.js"
 before_status="$(git -C "$REPO" status --porcelain)"
 OUT="$WORK/dirty.md"
-if "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" >"$WORK/dirty.log" 2>&1; then
+if "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" >"$WORK/dirty.log" 2>&1; then
   pass "a run against a repo that was already dirty still succeeds"
 else
   fail "a run against a repo that was already dirty still succeeds"
@@ -278,7 +278,7 @@ fresh_repo "$REPO"
 echo "notes to self" > "$REPO/scratch-note.md"
 echo "// mine, uncommitted" >> "$REPO/src/index.js"
 OUT="$WORK/clobber.md"
-if err="$(CLAUDE_STUB_MODE=clobber "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(CLAUDE_STUB_MODE=clobber "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose session wrote over the operator's uncommitted work exits non-zero"
 else
   pass "a run whose session wrote over the operator's uncommitted work exits non-zero"
@@ -312,7 +312,7 @@ echo "pocock driver, the session replaces a CONTEXT.md the repo already had:"
 fresh_repo "$REPO"
 echo "the map I was half way through writing" > "$REPO/CONTEXT.md"
 OUT="$WORK/replaced.md"
-if err="$("$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$("$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   pass "a run that replaced an uncommitted CONTEXT.md still succeeds -- writing that file is what the run is for"
 else
   fail "a run that replaced an uncommitted CONTEXT.md still succeeds -- writing that file is what the run is for"
@@ -353,10 +353,7 @@ echo "pocock driver, interrupted mid-run:"
 # SIGTERM it cannot. deliverable_interrupt has the reasoning, and issue 67
 # the decision to write it down rather than chase it.
 INTERRUPT="$(deliverable_interrupt)"
-case "$INTERRUPT" in
-  INT) expected_status=130 ;;
-  TERM) expected_status=143 ;;
-esac
+set_expected_status "$INTERRUPT"
 announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 for shape in dies traps; do
@@ -413,8 +410,8 @@ for shape in dies traps; do
   # the only positive evidence that the signal landed and was acted on,
   # rather than the run having failed for some unrelated reason of its own
   # -- the marker file above gives `traps` that evidence directly.
-  assert_eq "$killed_status" "$expected_status" \
-    "interrupted mid-run, $shape_label: the driver exits $expected_status, the status of a run stopped by SIG$INTERRUPT"
+  assert_eq "$killed_status" "$EXPECTED_STATUS" \
+    "interrupted mid-run, $shape_label: the driver exits $EXPECTED_STATUS, the status of a run stopped by SIG$INTERRUPT"
   assert_widget_repo_pristine "$REPO" "interrupted mid-run, $shape_label"
   assert_file_missing "$REPO/CONTEXT.md" \
     "interrupted mid-run, $shape_label: nothing is left behind to harvest, the map included"
@@ -429,7 +426,7 @@ echo "pocock driver, the session commits:"
 # reading clean, which is what makes quiet success here so bad a failure.
 fresh_repo "$REPO"
 OUT="$WORK/committed.md"
-if err="$(CLAUDE_STUB_MODE=commit "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(CLAUDE_STUB_MODE=commit "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose session committed exits non-zero rather than quietly succeeding"
 else
   pass "a run whose session committed exits non-zero rather than quietly succeeding"
@@ -506,7 +503,7 @@ BROKEN_DRIVERS="$WORK/broken-drivers"
 drivers_with_override "$BROKEN_DRIVERS" 'fingerprint_paths() { return 1; }' || exit 1
 fresh_repo "$REPO"
 OUT="$WORK/no-fingerprint.md"
-if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose snapshot cannot be taken fails rather than going ahead without one"
 else
   pass "a run whose snapshot cannot be taken fails rather than going ahead without one"
@@ -523,7 +520,7 @@ assert_widget_repo_pristine "$REPO" "snapshot could not be taken"
 drivers_with_override "$BROKEN_DRIVERS" 'paths_changed_since_snapshot() { return 1; }' || exit 1
 fresh_repo "$REPO"
 OUT="$WORK/no-naming.md"
-if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run that cannot find out what the session wrote fails rather than reading that as a session that wrote only the map"
 else
   pass "a run that cannot find out what the session wrote fails rather than reading that as a session that wrote only the map"
@@ -543,7 +540,7 @@ drivers_with_override "$BROKEN_DRIVERS" 'report_kept_paths_replaced() { return 1
 fresh_repo "$REPO"
 echo "the map I was half way through writing" > "$REPO/CONTEXT.md"
 OUT="$WORK/no-report.md"
-if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver --root "$WORK" pocock "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   pass "a run that could not work out whether it replaced the operator's own map still succeeds -- the map is written and harvested either way"
 else
   fail "a run that could not work out whether it replaced the operator's own map still succeeds -- the map is written and harvested either way"

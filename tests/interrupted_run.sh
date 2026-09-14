@@ -111,10 +111,7 @@ chmod +x "$DRIVERS/hangs/run.sh"
 # cannot deliver SIGINT to anything, and archimedes has to treat the two
 # identically anyway.
 INTERRUPT="$(deliverable_interrupt)"
-case "$INTERRUPT" in
-  INT) EXPECTED_STATUS=130 ;;
-  TERM) EXPECTED_STATUS=143 ;;
-esac
+set_expected_status "$INTERRUPT"
 announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 # Starts a run and waits until the driver is really under way, leaving
@@ -132,7 +129,7 @@ start_a_run() {
 
   start_run_in_background "$1" \
     env ARCHIMEDES_DRIVERS_DIR="$DRIVERS" HANGS_DRIVER_STARTED="$STARTED" \
-    "$ARCHIMEDES_BIN" run-driver hangs "$REPO" "$WORK/harvested.md"
+    "$ARCHIMEDES_BIN" run-driver --root "$WORK" hangs "$REPO" "$WORK/harvested.md"
 
   # A bound of its own, not the stub driver's: this one waits for the driver
   # to scaffold, and that one waits, once it has, for a signal that never

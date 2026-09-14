@@ -133,7 +133,7 @@ echo "spec-kit driver, successful run:"
 
 fresh_repo "$REPO"
 OUT="$WORK/CONTEXT.md"
-if "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
+if "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" >"$WORK/run.log" 2>&1; then
   pass "a run whose session fills the constitution in exits zero"
 else
   fail "a run whose session fills the constitution in exits zero"
@@ -151,7 +151,7 @@ echo "spec-kit driver, the session does nothing:"
 
 fresh_repo "$REPO"
 OUT="$WORK/noop.md"
-if err="$(CLAUDE_STUB_MODE=noop "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(CLAUDE_STUB_MODE=noop "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose session leaves the template untouched exits non-zero"
 else
   pass "a run whose session leaves the template untouched exits non-zero"
@@ -166,7 +166,7 @@ echo "spec-kit driver, the session fails:"
 
 fresh_repo "$REPO"
 OUT="$WORK/fail.md"
-if CLAUDE_STUB_MODE=fail "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" >/dev/null 2>&1; then
+if CLAUDE_STUB_MODE=fail "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" >/dev/null 2>&1; then
   fail "a run whose session exits non-zero fails the driver too"
 else
   pass "a run whose session exits non-zero fails the driver too"
@@ -179,7 +179,7 @@ echo "spec-kit driver, specify itself fails:"
 
 fresh_repo "$REPO"
 OUT="$WORK/specify-fail.md"
-if err="$(SPECIFY_STUB_FAIL=1 "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(SPECIFY_STUB_FAIL=1 "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose specify init fails exits non-zero"
 else
   pass "a run whose specify init fails exits non-zero"
@@ -193,7 +193,7 @@ echo "spec-kit driver, specify scaffolds no constitution:"
 
 fresh_repo "$REPO"
 OUT="$WORK/no-constitution.md"
-if err="$(SPECIFY_STUB_NO_CONSTITUTION=1 "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(SPECIFY_STUB_NO_CONSTITUTION=1 "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run where specify scaffolds no constitution exits non-zero"
 else
   pass "a run where specify scaffolds no constitution exits non-zero"
@@ -221,7 +221,7 @@ fresh_repo "$REPO"
 mkdir -p "$REPO/.specify/memory"
 echo "the constitution I was half way through drafting" > "$REPO/.specify/memory/constitution.md"
 OUT="$WORK/replaced.md"
-if err="$("$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$("$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   pass "a run that replaced an uncommitted constitution still succeeds -- filling that file in is what the run is for"
 else
   fail "a run that replaced an uncommitted constitution still succeeds -- filling that file in is what the run is for"
@@ -258,10 +258,7 @@ echo "spec-kit driver, interrupted mid-run:"
 # SIGTERM it cannot. deliverable_interrupt has the reasoning, and issue 67
 # the decision to write it down rather than chase it.
 INTERRUPT="$(deliverable_interrupt)"
-case "$INTERRUPT" in
-  INT) expected_status=130 ;;
-  TERM) expected_status=143 ;;
-esac
+set_expected_status "$INTERRUPT"
 announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 for shape in dies traps; do
@@ -318,8 +315,8 @@ for shape in dies traps; do
   # the only positive evidence that the signal landed and was acted on,
   # rather than the run having failed for some unrelated reason of its own
   # -- the marker file above gives `traps` that evidence directly.
-  assert_eq "$killed_status" "$expected_status" \
-    "interrupted mid-run, $shape_label: the driver exits $expected_status, the status of a run stopped by SIG$INTERRUPT"
+  assert_eq "$killed_status" "$EXPECTED_STATUS" \
+    "interrupted mid-run, $shape_label: the driver exits $EXPECTED_STATUS, the status of a run stopped by SIG$INTERRUPT"
   # The session had already written the constitution by this point, so a
   # driver that shrugged the interrupt off would have left it sitting there
   # for the driver runner to harvest -- a context map for a repo nobody
@@ -339,7 +336,7 @@ echo "spec-kit driver, the session commits:"
 # for a repo that now has a whole toolchain committed into it.
 fresh_repo "$REPO"
 OUT="$WORK/committed.md"
-if err="$(CLAUDE_STUB_MODE=commit "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(CLAUDE_STUB_MODE=commit "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose session committed exits non-zero rather than quietly succeeding"
 else
   pass "a run whose session committed exits non-zero rather than quietly succeeding"
@@ -367,7 +364,7 @@ BROKEN_DRIVERS="$WORK/broken-drivers"
 drivers_with_override "$BROKEN_DRIVERS" 'fingerprint_paths() { return 1; }' || exit 1
 fresh_repo "$REPO"
 OUT="$WORK/no-fingerprint.md"
-if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   fail "a run whose snapshot cannot be taken fails rather than scaffolding into a repo it could not describe first"
 else
   pass "a run whose snapshot cannot be taken fails rather than scaffolding into a repo it could not describe first"
@@ -383,7 +380,7 @@ fresh_repo "$REPO"
 mkdir -p "$REPO/.specify/memory"
 echo "the constitution I was half way through drafting" > "$REPO/.specify/memory/constitution.md"
 OUT="$WORK/no-report.md"
-if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
+if err="$(ARCHIMEDES_DRIVERS_DIR="$BROKEN_DRIVERS" "$ARCHIMEDES_BIN" run-driver --root "$WORK" spec-kit "$REPO" "$OUT" 2>&1 >/dev/null)"; then
   pass "a run that could not work out whether it replaced the operator's own constitution still succeeds"
 else
   fail "a run that could not work out whether it replaced the operator's own constitution still succeeds"

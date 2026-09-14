@@ -238,6 +238,16 @@ behind each one are in [`docs/cli.md`](./docs/cli.md).
   `domain-modeling` skill and a `spec-kit` driver wrapping
   [GitHub's Spec Kit](https://github.com/github/spec-kit), which has to
   scaffold itself into the target repo and strip that back out again.
+- `unfinished-runs` / `unfinished-runs restore <id>` / `... forget <id>` —
+  the target repos a driver run was still working in when it died. A driver
+  that scaffolds into someone's repository undoes it on its way out, and
+  where the driver is killed outright — a `SIGKILL`, an OOM kill, a machine
+  losing power — `archimedes` re-runs that rollback itself from the snapshot
+  it was handed before the run started. This is what is left when
+  `archimedes` was killed too: a record on disk naming the repo, what the
+  run left sitting in it, and `restore` to put it back when you say so.
+  Reporting only until then — acting means writing to a repository on the
+  strength of a run that may be days old.
 - `drivers` / `drivers adopt <name>` — list every driver this instance can
   run and which of the two places it comes from: the instance's own
   `drivers/`, which nothing ever refreshes, or the binary, where a fix

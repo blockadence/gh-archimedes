@@ -37,7 +37,10 @@ type Row struct {
 	Note     string `json:"note"`
 	// NeedsRebase marks a stacked branch whose base has merged out from
 	// under it (see NeedsRebase in stack.go). RebaseOnto is the ref it
-	// should be moved onto; it's empty on every unflagged row.
+	// should be moved onto; it's empty on every unflagged row. The flag is
+	// what a renderer colours a row by; what buys the row a sentence in the
+	// rebase-needed block is the whole of what RebaseNeeded asks, since a
+	// sentence also needs a base to name.
 	NeedsRebase bool   `json:"needs_rebase"`
 	RebaseOnto  string `json:"rebase_onto,omitempty"`
 }
@@ -78,16 +81,65 @@ type Sources struct {
 	Merged MergedLookup
 }
 
-// RebaseNeeded returns the rows whose stacked base has merged, in report
-// order.
-func (r Report) RebaseNeeded() []Row {
-	var flagged []Row
+// RebaseNeeded returns one rebase per row whose stacked base has merged,
+// in report order: the flagged rows, each already carrying the base its
+// sentence names.
+//
+// This is the only thing that builds one, and a row it cannot read a base
+// out of does not get one built — so a flagged row with no base is left
+// out here rather than printed as a sentence with its middle missing.
+// Which is the whole of the invariant: BuildReport only flags a row
+// stackref could read a base out of (see checkStack), and that used to be
+// a promise in prose that any other hand on Row could break.
+func (r Report) RebaseNeeded() []rebase {
+	var flagged []rebase
 	for _, row := range r.Rows {
-		if row.NeedsRebase {
-			flagged = append(flagged, row)
+		if !row.NeedsRebase || row.RebaseOnto == "" {
+			continue
 		}
+		base, ok := stackref.ParseNote(row.Note)
+		if !ok {
+			continue
+		}
+		flagged = append(flagged, rebase{dep: row.ref(), base: base, onto: row.RebaseOnto})
 	}
 	return flagged
+}
+
+// rebase is one rebase a report is asking for: the dependent, the base
+// that merged out from under it, and the ref the dependent should be moved
+// onto. It sits beside Row rather than in it because a Row is every row,
+// flagged or not, and this is only the ones with a base to name — the
+// sentence in Line has no honest form for a row that has none.
+//
+// Unexported, with an exported method, where the rest of this package's
+// shapes are the other way round: a renderer ranges over what RebaseNeeded
+// hands it and prints Line, and never needs to name the type — and not
+// naming it is the point, because a type another package cannot name is
+// one it cannot hold an empty value of either. Row is untouched by that:
+// --json and the MCP status tool serialise Rows, and nothing here is a
+// field of one.
+//
+// The base is parsed back out of the note rather than carried down from
+// checkStack, which already parsed it, so that a Report stays a plain
+// value any caller can build and render — the dashboard's tests do exactly
+// that — instead of one whose rebase block only BuildReport can fill.
+type rebase struct {
+	dep  stackref.Ref
+	base stackref.Ref
+	onto string
+}
+
+// Line is the sentence a flagged row gets in the rebase-needed block. It
+// lives here rather than in each renderer so that the human table and the
+// dashboard print the same line for the same condition, and so neither of
+// them shapes the pair itself.
+//
+// The dependent is named exactly as its base is, and the base reaches the
+// reader as the ref the code parsed rather than as the raw note it came
+// out of — the note's wording is stackref's to write either way.
+func (r rebase) Line() string {
+	return fmt.Sprintf("%s (%s) — rebase onto %s", r.dep, stackref.Note(r.base), r.onto)
 }
 
 // ref is the "<repo>:<slug>" pair naming this row's unit of work, from
@@ -98,21 +150,8 @@ func (r Report) RebaseNeeded() []Row {
 //
 // Unexported where prune.Item.Ref is not, because nothing outside this
 // package prints a row's pair on its own: the renderers print whole
-// lines, which is what RebaseLine is for.
+// lines, which is what rebase.Line is for.
 func (r Row) ref() stackref.Ref { return stackref.Ref{Repo: r.Repo, Slug: r.Slug} }
-
-// RebaseLine is the sentence a flagged row gets in the rebase-needed
-// block. It lives here rather than in each renderer so that the human
-// table and the dashboard print the same line for the same condition, and
-// so neither of them shapes the pair itself.
-//
-// The dependent is named exactly as its base is. The note carries the
-// base as stackref's pair, and a row is only flagged when stackref could
-// read that note (see checkStack), so on any line this ever renders both
-// halves are the same shape.
-func (r Row) RebaseLine() string {
-	return fmt.Sprintf("%s (%s) — rebase onto %s", r.ref(), r.Note, r.RebaseOnto)
-}
 
 // BuildReport looks up each status.md row's live PR state, flags any
 // stacked row its base has merged out from under, and applies the
@@ -170,8 +209,8 @@ func FormatHuman(r Report) string {
 
 	if flagged := r.RebaseNeeded(); len(flagged) > 0 {
 		b.WriteString("Rebase needed — these branches are stacked on a base that has since merged:\n")
-		for _, row := range flagged {
-			fmt.Fprintf(&b, "  %s\n", row.RebaseLine())
+		for _, rb := range flagged {
+			fmt.Fprintf(&b, "  %s\n", rb.Line())
 		}
 		b.WriteString("\n")
 	}

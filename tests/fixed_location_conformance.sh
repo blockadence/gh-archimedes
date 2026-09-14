@@ -570,7 +570,7 @@ start_run() { # <drivers-dir> <driver-name> <shape>
     CONFORMANCE_LOG="$SESSION_LOG" \
     CONFORMANCE_SESSION_SHAPE="$session" \
     CONFORMANCE_HANG_SENTINEL="$SESSION_HANGING" \
-    "$ARCHIMEDES_BIN" run-driver "$name" "$REPO" "$WORK/harvested.md"
+    "$ARCHIMEDES_BIN" run-driver --root "$WORK" "$name" "$REPO" "$WORK/harvested.md"
   return 0
 }
 
