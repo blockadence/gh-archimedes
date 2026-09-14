@@ -111,10 +111,7 @@ chmod +x "$DRIVERS/hangs/run.sh"
 # cannot deliver SIGINT to anything, and archimedes has to treat the two
 # identically anyway.
 INTERRUPT="$(deliverable_interrupt)"
-case "$INTERRUPT" in
-  INT) EXPECTED_STATUS=130 ;;
-  TERM) EXPECTED_STATUS=143 ;;
-esac
+set_expected_status "$INTERRUPT"
 announce_interrupt_fallback "$INTERRUPT" "interrupting with"
 
 # Starts a run and waits until the driver is really under way, leaving
