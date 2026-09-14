@@ -259,15 +259,38 @@ func TestFormatHumanListsRebaseNeededRows(t *testing.T) {
 	}
 }
 
-func TestRebaseLineNamesTheDependentTheSameWayAsItsBase(t *testing.T) {
-	row := Row{
+func TestRebaseNeededNamesTheDependentTheSameWayAsItsBase(t *testing.T) {
+	report := Report{Rows: []Row{{
 		Slug: "auth-ui", Repo: "service-a",
 		Note:        stackref.Note(stackref.Ref{Repo: "service-a", Slug: "auth-api"}),
 		NeedsRebase: true, RebaseOnto: "origin/main",
+	}}}
+
+	flagged := report.RebaseNeeded()
+	if len(flagged) != 1 {
+		t.Fatalf("RebaseNeeded() returned %d rebases, want 1", len(flagged))
 	}
 
 	want := "service-a:auth-ui (stacked on service-a:auth-api) — rebase onto origin/main"
-	if got := row.RebaseLine(); got != want {
-		t.Errorf("RebaseLine() = %q, want %q", got, want)
+	if got := flagged[0].Line(); got != want {
+		t.Errorf("Line() = %q, want %q", got, want)
+	}
+}
+
+// A flagged row whose note names no base can't happen out of BuildReport,
+// which only flags a row stackref could read a base out of. It can happen
+// to any other hand on Row, whose fields are all settable — and what used
+// to come of it was the sentence with its middle missing.
+func TestRebaseNeededLeavesOutAFlaggedRowThatNamesNoBase(t *testing.T) {
+	report := Report{Rows: []Row{
+		{Slug: "auth-ui", Repo: "service-a", Note: "based on main", NeedsRebase: true},
+		{Slug: "widget", Repo: "service-b", NeedsRebase: true, RebaseOnto: "origin/main"},
+	}}
+
+	if flagged := report.RebaseNeeded(); len(flagged) != 0 {
+		t.Errorf("RebaseNeeded() = %+v, want nothing for rows with no base", flagged)
+	}
+	if got := FormatHuman(report); strings.Contains(got, "Rebase needed") {
+		t.Errorf("expected no rebase-needed block without a base to name, got:\n%s", got)
 	}
 }
