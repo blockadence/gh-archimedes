@@ -192,8 +192,14 @@ func TestRenderFlagsAStackedBranchWhoseBaseHasMerged(t *testing.T) {
 	}
 
 	got := plain(Render(Frame{Snapshot: snap, Loaded: true, Width: 120}))
-	if !strings.Contains(got, "Rebase needed") || !strings.Contains(got, "widget / service-b — rebase onto origin/main") {
-		t.Errorf("expected the rebase list the CLI prints:\n%s", got)
+	// The sentence status owns — "service-b:widget (stacked on
+	// service-a:auth) — rebase onto origin/main", note and all — rather
+	// than a differently-shaped line for the same condition. Asked of the
+	// row rather than spelled out here, so a renderer that goes back to
+	// formatting its own fails this even if the wording later changes.
+	want := snap.Report.Rows[0].RebaseLine()
+	if !strings.Contains(got, "Rebase needed") || !strings.Contains(got, want) {
+		t.Errorf("expected the rebase list the CLI prints, %q:\n%s", want, got)
 	}
 }
 

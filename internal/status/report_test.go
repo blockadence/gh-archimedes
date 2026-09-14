@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/blockadence/gh-archimedes/internal/stackref"
 	"github.com/blockadence/gh-archimedes/internal/statusfile"
 )
 
@@ -250,10 +251,23 @@ func TestFormatHumanListsRebaseNeededRows(t *testing.T) {
 	if !strings.Contains(got, "Rebase needed") {
 		t.Errorf("expected a rebase-needed section, got:\n%s", got)
 	}
-	if !strings.Contains(got, "auth-ui / service-a (stacked on service-a:auth-api) — rebase onto origin/main") {
+	if !strings.Contains(got, "service-a:auth-ui (stacked on service-a:auth-api) — rebase onto origin/main") {
 		t.Errorf("expected the flagged row spelled out, got:\n%s", got)
 	}
 	if strings.Contains(got, "service-b (based on main)") {
 		t.Errorf("expected unflagged rows left out of the section, got:\n%s", got)
+	}
+}
+
+func TestRebaseLineNamesTheDependentTheSameWayAsItsBase(t *testing.T) {
+	row := Row{
+		Slug: "auth-ui", Repo: "service-a",
+		Note:        stackref.Note(stackref.Ref{Repo: "service-a", Slug: "auth-api"}),
+		NeedsRebase: true, RebaseOnto: "origin/main",
+	}
+
+	want := "service-a:auth-ui (stacked on service-a:auth-api) — rebase onto origin/main"
+	if got := row.RebaseLine(); got != want {
+		t.Errorf("RebaseLine() = %q, want %q", got, want)
 	}
 }
