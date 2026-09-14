@@ -11,10 +11,31 @@ import "path/filepath"
 // checkout as `../<name>` and bootstrap clones beside the instance, but the
 // manifest permits a path below the root too, and `repos/<name>` is exactly
 // the layout internal/worktree's own test exercises for that case. So one
-// instance can hold `repos/service-a.md` and `repos/service-a/` at once.
-// Nothing resolves a checkout through Dir, and nothing should: where a
-// checkout is comes from the manifest entry that records it
-// (manifest.CheckoutOf), wherever that entry says.
+// instance can hold `repos/service-a.md` and `repos/service-a/` at once —
+// two entries that share a name and never a path. Nothing resolves a
+// checkout through Dir, and nothing should: where a checkout is comes from
+// the manifest entry that records it (manifest.CheckoutOf), wherever that
+// entry says.
+//
+// That arrangement stays, decided rather than inherited (issue 76). The
+// ambiguity costs the paragraph above; removing it would cost a migration
+// of every instance in existence, since `repos/<name>.md` is what each of
+// them carries and an instance is a git repository whose dossiers are
+// committed, whose history refers to them by that path, and whose generated
+// WORKSPACE-MAP.md links them there (workspacemap.RepoLine). That is a
+// move, a compatibility read of the old location, and some way to tell an
+// operator any of it happened — bought for a collision that has never
+// occurred and that only a manifest pointing a checkout below the root can
+// arrange. What keeps it from being one is that every reader here looks a
+// dossier up by name (Path) rather than walking the directory: dir_test.go
+// holds that with a checkout sitting under the same name, and spawn's suite
+// holds it through a real subcommand.
+//
+// The answer changes the day something does resolve a checkout through Dir
+// — a subcommand that opens a repo from a dossier name, say. That is the
+// day to run the argument again, with a real collision to weigh the
+// migration against, rather than a reason to let the join below mean two
+// things in the meantime.
 //
 // Dir rather than the DirName the packages owning an instance's other
 // directories export (conventionpack.DirName, reposync.ScaffoldingDirName,

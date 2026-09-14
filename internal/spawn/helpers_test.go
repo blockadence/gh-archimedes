@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/blockadence/gh-archimedes/internal/dossier"
+	"github.com/blockadence/gh-archimedes/internal/spawn"
 	"github.com/blockadence/gh-archimedes/internal/testrepo"
 )
 
@@ -70,4 +72,28 @@ func (i instance) workSlug(t *testing.T, slug string) string {
 	dir := filepath.Join(i.root, "work", slug)
 	mustMkdirAll(t, dir)
 	return dir
+}
+
+// writeDossier writes repo's dossier into the instance at root with rules
+// as its house rules, which is all spawn reads a dossier for.
+func writeDossier(t *testing.T, root, repo, rules string) {
+	t.Helper()
+	mustMkdirAll(t, dossier.Dir(root))
+	mustWriteFile(t, dossier.Path(dossier.Dir(root), repo),
+		"# "+repo+"\n\n"+dossier.HouseRulesHeading+"\n\n"+rules+"\n\n## Known gotchas\nn/a\n")
+}
+
+// assertHouseRules requires the worktree's ephemeral copy to carry exactly
+// the rules the dossier recorded -- the delivery being the only thing that
+// says the right dossier was read.
+func assertHouseRules(t *testing.T, wt, rules string) {
+	t.Helper()
+	path := filepath.Join(wt, spawn.ContextDirName, dossier.HouseRulesFileName)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("%s was not delivered: %v", dossier.HouseRulesFileName, err)
+	}
+	if string(got) != rules+"\n" {
+		t.Errorf("house rules diverged from the dossier\n got: %q\nwant: %q", got, rules+"\n")
+	}
 }

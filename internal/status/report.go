@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/blockadence/gh-archimedes/internal/manifest"
+	"github.com/blockadence/gh-archimedes/internal/stackref"
 	"github.com/blockadence/gh-archimedes/internal/statusfile"
 )
 
@@ -89,6 +90,30 @@ func (r Report) RebaseNeeded() []Row {
 	return flagged
 }
 
+// ref is the "<repo>:<slug>" pair naming this row's unit of work, from
+// the package that owns that shape. Row keeps the two halves apart
+// because both renderers have them as two columns, read left to right in
+// the order status.md has them; a sentence about the row is not a table,
+// and says the pair.
+//
+// Unexported where prune.Item.Ref is not, because nothing outside this
+// package prints a row's pair on its own: the renderers print whole
+// lines, which is what RebaseLine is for.
+func (r Row) ref() stackref.Ref { return stackref.Ref{Repo: r.Repo, Slug: r.Slug} }
+
+// RebaseLine is the sentence a flagged row gets in the rebase-needed
+// block. It lives here rather than in each renderer so that the human
+// table and the dashboard print the same line for the same condition, and
+// so neither of them shapes the pair itself.
+//
+// The dependent is named exactly as its base is. The note carries the
+// base as stackref's pair, and a row is only flagged when stackref could
+// read that note (see checkStack), so on any line this ever renders both
+// halves are the same shape.
+func (r Row) RebaseLine() string {
+	return fmt.Sprintf("%s (%s) — rebase onto %s", r.ref(), r.Note, r.RebaseOnto)
+}
+
 // BuildReport looks up each status.md row's live PR state, flags any
 // stacked row its base has merged out from under, and applies the
 // guardrail threshold. The rows it takes are the file's (statusfile.Row);
@@ -146,7 +171,7 @@ func FormatHuman(r Report) string {
 	if flagged := r.RebaseNeeded(); len(flagged) > 0 {
 		b.WriteString("Rebase needed — these branches are stacked on a base that has since merged:\n")
 		for _, row := range flagged {
-			fmt.Fprintf(&b, "  %s / %s (%s) — rebase onto %s\n", row.Slug, row.Repo, row.Note, row.RebaseOnto)
+			fmt.Fprintf(&b, "  %s\n", row.RebaseLine())
 		}
 		b.WriteString("\n")
 	}

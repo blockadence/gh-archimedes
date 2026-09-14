@@ -213,7 +213,7 @@ func TestRunStatusFlagsStackedRebase(t *testing.T) {
 	}
 
 	got := buf.String()
-	if !strings.Contains(got, "my-slug / service-b (stacked on service-a:auth-api) — rebase onto origin/main") {
+	if !strings.Contains(got, "service-b:my-slug (stacked on service-a:auth-api) — rebase onto origin/main") {
 		t.Errorf("expected the stacked row flagged for rebase, got:\n%s", got)
 	}
 	if strings.Contains(got, "service-a (based on main)") {
