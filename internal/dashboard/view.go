@@ -223,7 +223,7 @@ func worktrees(s Snapshot, width int) string {
 	b.WriteString(indent(styleWarn.Render("Rebase needed — these branches are stacked on a base that has since merged:")))
 	b.WriteString("\n")
 	for _, r := range flagged {
-		b.WriteString(indent("  " + styleWarn.Render(r.RebaseLine())))
+		b.WriteString(indent("  " + styleWarn.Render(r.Line())))
 		b.WriteString("\n")
 	}
 
