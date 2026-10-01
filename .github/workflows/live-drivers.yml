@@ -102,7 +102,7 @@ jobs:
       # used, a cache default we do not set, and caching turned off for
       # `pull_request_target`, `workflow_run` and `release` -- none of which
       # is a trigger on this file.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.2.0
 
       - name: Install the specify CLI the spec-kit driver unpacks
         run: |
